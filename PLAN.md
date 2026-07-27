@@ -12,7 +12,10 @@ Goal: mount, power on, see the live frame and confirm it's alive.
 - [x] 2. `config.py`: load/validate `config.yaml` (camera, motion, detection,
       ocr, dedup, watchlist, dashboard, storage, log_level), clear error on
       bad config. Tests in `tests/test_config.py`.
-- [ ] 3. Logging: structured, to journald, level from config.
+- [x] 3. Logging: structured, to journald, level from config.
+      `carma/logging_setup.py` + wired into `service.run()` (config load ->
+      logging setup -> "config OK" log line). Verified end-to-end with
+      `python -m carma --config config.example.yaml`.
 - [ ] 4. `capture/base.py` abstract interface — already defined, nothing
       left to do here.
 - [ ] 5. `Picamera2Source`: real implementation (CSI — default backend, this
