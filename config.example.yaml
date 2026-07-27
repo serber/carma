@@ -1,0 +1,37 @@
+# Copy to config.yaml and adjust. Paths are relative to the working
+# directory carma is started from (see systemd/carma.service).
+
+camera:
+  backend: picamera2   # picamera2 (CSI, default) | opencv (USB)
+  device: 0             # opencv backend only: V4L2 index or /dev/videoN
+  resolution: [1280, 720]
+  framerate: 30
+
+motion:
+  threshold: 25          # frame-diff sensitivity; lower = more sensitive
+  min_area: 500           # ignore diffs smaller than this (pixels)
+  roi: null                # [x, y, w, h] in pixels, null = full frame
+
+detection:
+  model_path: models/plate_detector.onnx
+  confidence_threshold: 0.5
+
+ocr:
+  model_path: models/plate_ocr.onnx
+
+dedup:
+  window_seconds: 30
+
+watchlist:
+  enabled: false
+  plates: []              # full or partial plate strings to flag/highlight
+
+dashboard:
+  host: 0.0.0.0
+  port: 8000
+
+storage:
+  db_path: data/carma.db
+  images_dir: data/images
+
+log_level: INFO
