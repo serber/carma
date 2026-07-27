@@ -1,9 +1,54 @@
 #!/usr/bin/env bash
-# Installs carma to /opt/carma and enables the systemd service.
-# TODO(stage 1, atomic step 10): venv creation with --system-site-packages
-# (needed for picamera2), pip install, config.yaml seeding, systemd unit
-# install + enable. See README.md for the full bring-up checklist.
+# Installs carma to /opt/carma and enables the systemd service. Run as root
+# on Raspberry Pi OS Lite (64-bit, Trixie) after cloning this repo.
+# See README.md for the full bring-up checklist.
 set -euo pipefail
 
-echo "not implemented yet — see build order stage 1 in SPEC.md" >&2
-exit 1
+INSTALL_DIR="/opt/carma"
+SERVICE_USER="carma"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ $EUID -ne 0 ]]; then
+    echo "run as root (sudo $0)" >&2
+    exit 1
+fi
+
+echo "==> installing system packages (picamera2, venv, camera libs)"
+apt-get update
+apt-get install -y --no-install-recommends \
+    python3-venv python3-picamera2 python3-opencv libcap-dev
+
+if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    echo "==> creating service user $SERVICE_USER"
+    useradd --system --home "$INSTALL_DIR" --groups video --shell /usr/sbin/nologin "$SERVICE_USER"
+fi
+
+echo "==> copying repo to $INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+rsync -a --exclude .venv --exclude .git --exclude data "$REPO_DIR"/ "$INSTALL_DIR"/
+
+echo "==> creating venv (system site packages, needed for picamera2)"
+python3 -m venv --system-site-packages "$INSTALL_DIR/.venv"
+"$INSTALL_DIR/.venv/bin/pip" install --upgrade pip
+"$INSTALL_DIR/.venv/bin/pip" install "$INSTALL_DIR"
+
+if [[ ! -f "$INSTALL_DIR/config.yaml" ]]; then
+    echo "==> seeding config.yaml from config.example.yaml"
+    cp "$INSTALL_DIR/config.example.yaml" "$INSTALL_DIR/config.yaml"
+fi
+
+mkdir -p "$INSTALL_DIR/data/images" "$INSTALL_DIR/models"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+
+echo "==> installing systemd unit"
+cp "$INSTALL_DIR/systemd/carma.service" /etc/systemd/system/carma.service
+systemctl daemon-reload
+systemctl enable carma
+
+cat <<MSG
+==> done.
+    - review $INSTALL_DIR/config.yaml (camera backend/resolution, dashboard port)
+    - drop a plate-detector/OCR ONNX model in $INSTALL_DIR/models/ (stage 2+)
+    - start it:   systemctl start carma
+    - watch it:   journalctl -u carma -f
+MSG

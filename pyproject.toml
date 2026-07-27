@@ -20,7 +20,7 @@ dependencies = [
 # only so `pip install .[csi]` works on-device with the venv given
 # --system-site-packages access to it.
 csi = ["picamera2"]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "httpx"]
 
 [project.scripts]
 carma = "carma.__main__:main"

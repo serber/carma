@@ -16,19 +16,39 @@ Goal: mount, power on, see the live frame and confirm it's alive.
       `carma/logging_setup.py` + wired into `service.run()` (config load ->
       logging setup -> "config OK" log line). Verified end-to-end with
       `python -m carma --config config.example.yaml`.
-- [ ] 4. `capture/base.py` abstract interface — already defined, nothing
-      left to do here.
-- [ ] 5. `Picamera2Source`: real implementation (CSI — default backend, this
-      device has a ribbon-cable camera).
-- [ ] 6. `OpenCVSource`: real implementation (USB — also useful for
-      developing/testing off-Pi with a laptop webcam).
-- [ ] 7. Startup self-check: camera OK / config OK, logged clearly.
-- [ ] 8. `web/app.py`: FastAPI app + MJPEG endpoint from the capture source.
-- [ ] 9. Dashboard: "frames captured" counter.
-- [ ] 10. `scripts/install.sh`: real install logic (venv w/
+- [x] 4. `capture/base.py` abstract interface — `FrameSource` ABC plus a
+      shared `FrameRateTracker` helper used by both backends.
+- [x] 5. `Picamera2Source`: real implementation (CSI — default backend, this
+      device has a ribbon-cable camera). picamera2 import deferred to
+      `start()` so the module loads fine off-Pi too.
+- [x] 6. `OpenCVSource`: real implementation (USB — also useful for
+      developing/testing off-Pi with a laptop webcam). Tested with a mocked
+      `cv2.VideoCapture` in `tests/test_opencv_source.py`.
+- [x] 7. Startup self-check: `carma/selfcheck.py` — camera OK / FAILED
+      logged clearly; a camera that fails to open does **not** crash the
+      service, so the dashboard stays reachable for diagnosis (matches the
+      spec's "dead camera -> 0 frames" behavior). config OK already covered
+      by step 2/3.
+- [x] 8. `web/app.py`: FastAPI app + `/stream.mjpg` MJPEG endpoint reading
+      from a background `CaptureLoop` (`carma/capture_loop.py`); falls back
+      to a red "camera unavailable" placeholder frame when the source has
+      no live capture loop.
+- [x] 9. Dashboard: `/api/status` JSON with `frames_captured` +
+      `motion_events`/`detections`/`ocr_reads` (0 until stage 2/3 wire them)
+      + fps + self-check, polled by the `/` page every second.
+- [x] 10. `scripts/install.sh`: real install logic (venv w/
        `--system-site-packages` for picamera2, pip install, seed
-       config.yaml, install + enable the systemd unit).
-- [ ] 11. README: fill in the bring-up checklist as each piece above lands.
+       config.yaml, install + enable the systemd unit). Not runnable off-Pi
+       (apt-based); will get its first real run at physical bring-up.
+- [x] 11. README: bring-up checklist updated + a "Development (off-Pi)"
+       section for iterating with `uv` before deploying.
+
+Verified end-to-end off-Pi: ran `python -m carma` with `camera.backend:
+opencv` pointed at a nonexistent device — self-check logs `camera FAILED`,
+service keeps running, `/` and `/api/status` respond normally,
+`frames_captured` stays 0, `/stream.mjpg` serves the placeholder JPEG.
+Real CSI hardware behavior (`Picamera2Source`) still needs a run on the
+actual Pi — first item to confirm at physical bring-up.
 
 ## Stage 2 — Motion + detection
 
