@@ -9,9 +9,9 @@ Goal: mount, power on, see the live frame and confirm it's alive.
 - [x] 1. Project scaffold: directory layout, `pyproject.toml`, stub modules
       with `NotImplementedError` + TODO markers, `config.example.yaml`,
       `systemd/carma.service`, README bring-up checklist stub.
-- [ ] 2. `config.py`: load/validate `config.yaml` (camera, motion, detection,
+- [x] 2. `config.py`: load/validate `config.yaml` (camera, motion, detection,
       ocr, dedup, watchlist, dashboard, storage, log_level), clear error on
-      bad config.
+      bad config. Tests in `tests/test_config.py`.
 - [ ] 3. Logging: structured, to journald, level from config.
 - [ ] 4. `capture/base.py` abstract interface — already defined, nothing
       left to do here.
