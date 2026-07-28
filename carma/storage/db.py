@@ -87,6 +87,20 @@ class HitStore:
             for row in rows
         ]
 
+    def count(self) -> int:
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM hits").fetchone()
+        return row[0]
+
+    def clear(self) -> None:
+        """Deletes every hit row. Does not touch image files on disk --
+        see storage.images.clear_images() for that, called alongside this
+        by the dashboard's "clear all" action."""
+        with self._lock:
+            self._conn.execute("DELETE FROM hits")
+            self._conn.commit()
+            self._conn.execute("VACUUM")
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

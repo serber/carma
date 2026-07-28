@@ -25,3 +25,14 @@ def save_hit_images(frame: np.ndarray, crop: np.ndarray, images_dir: str) -> tup
     cv2.imwrite(str(directory / frame_filename), frame)
     cv2.imwrite(str(directory / crop_filename), crop)
     return frame_filename, crop_filename
+
+
+def clear_images(images_dir: str) -> None:
+    """Deletes every file directly in images_dir. Called alongside
+    HitStore.clear() by the dashboard's "clear all" action."""
+    directory = Path(images_dir)
+    if not directory.is_dir():
+        return
+    for entry in directory.iterdir():
+        if entry.is_file():
+            entry.unlink()

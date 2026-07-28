@@ -25,6 +25,7 @@ from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
 from carma.settings import RuntimeSettings
 from carma.storage.db import Hit, HitStore
+from carma.storage.images import clear_images
 from carma.sysinfo import cpu_temperature_celsius, disk_usage
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,17 @@ def create_app(
     @app.get("/hits", response_class=HTMLResponse)
     def hits() -> str:
         recent = hit_store.recent(limit=50) if hit_store is not None else []
-        return _render_hits(recent)
+        total = hit_store.count() if hit_store is not None else 0
+        return _render_hits(recent, total)
+
+    @app.post("/api/hits/clear")
+    def clear_hits() -> JSONResponse:
+        count = hit_store.count() if hit_store is not None else 0
+        if hit_store is not None:
+            hit_store.clear()
+        clear_images(images_dir)
+        logger.warning("cleared %d hit(s) and their images via dashboard", count)
+        return JSONResponse({"cleared": count})
 
     return app
 
@@ -235,6 +246,13 @@ _STYLE = """
     .disk-fill.warning { background: var(--warning); }
     .disk-fill.critical { background: var(--critical); }
     .disk-label { color: var(--text-secondary); font-size: 13px; margin: 8px 0 16px; }
+    .hits-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .hits-toolbar h2 { margin: 0; }
+    .danger-button {
+      background: var(--critical); color: #fff; border: none; border-radius: 6px;
+      padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .danger-button:hover { opacity: 0.9; }
 """
 
 
@@ -409,7 +427,7 @@ def _confidence_meter(confidence: float) -> str:
     return f'<span class="meter"><span style="width:{pct}%"></span></span>{confidence:.2f}'
 
 
-def _render_hits(hits: list[Hit]) -> str:
+def _render_hits(hits: list[Hit], total_count: int) -> str:
     if not hits:
         rows = '<tr><td colspan="6">no hits yet</td></tr>'
     else:
@@ -428,12 +446,24 @@ def _render_hits(hits: list[Hit]) -> str:
         )
     body = f"""
     <div class="card">
-      <h2>Recent hits</h2>
+      <div class="hits-toolbar">
+        <h2>Recent hits</h2>
+        <button id="clear-hits" type="button" class="danger-button">Clear all hits &amp; images</button>
+      </div>
       <div class="table-wrap">
         <table>
           <tr><th>Timestamp</th><th>Plate</th><th>Format</th><th>Confidence</th><th>Watchlist</th><th>Crop</th></tr>
           {rows}
         </table>
       </div>
-    </div>"""
+    </div>
+    <script>
+      document.getElementById('clear-hits').addEventListener('click', async () => {{
+        if (!confirm('Delete all {total_count} stored hit(s) and their images? This cannot be undone.')) {{
+          return;
+        }}
+        const resp = await fetch('/api/hits/clear', {{ method: 'POST' }});
+        if (resp.ok) location.reload();
+      }});
+    </script>"""
     return _page("carma — hits", "hits", body)

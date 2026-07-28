@@ -116,6 +116,50 @@ def test_hits_page_highlights_watchlist_matches():
     assert "watchlist-match" in resp.text
 
 
+def test_hits_page_includes_clear_button_with_count():
+    hit_store = FakeHitStore()
+    hit_store.insert("2026-07-28T12:00:00+00:00", "123ABC02", 0.91, "KZ", False, "f1.jpg", "c1.jpg")
+    hit_store.insert("2026-07-28T12:01:00+00:00", "A123BC77", 0.8, "RU", False, "f2.jpg", "c2.jpg")
+    client = _client(hit_store=hit_store)
+
+    resp = client.get("/hits")
+
+    assert 'id="clear-hits"' in resp.text
+    assert "Delete all 2 stored hit(s)" in resp.text
+
+
+def test_clear_hits_endpoint_empties_store_and_images(tmp_path):
+    hit_store = FakeHitStore()
+    hit_store.insert("2026-07-28T12:00:00+00:00", "123ABC02", 0.91, "KZ", False, "f1.jpg", "c1.jpg")
+    source = FakeSource()
+    counters = Counters()
+    settings = RuntimeSettings(min_confidence=0.0)
+    loop = CaptureLoop(
+        source, counters, MotionDetector(threshold=25, min_area=500), None, None, None,
+        "unused", Deduper(window_seconds=0), Watchlist(enabled=False, plates=[]), settings,
+    )
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    (images_dir / "f1.jpg").write_bytes(b"fake jpeg")
+    self_check = {"config": True, "camera": True, "model": True, "ocr": True, "storage": True}
+    app = create_app(loop, counters, self_check, hit_store, str(images_dir), settings)
+    client = TestClient(app)
+
+    resp = client.post("/api/hits/clear")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"cleared": 1}
+    assert hit_store.count() == 0
+    assert list(images_dir.iterdir()) == []
+
+
+def test_clear_hits_endpoint_with_no_store():
+    client = _client(hit_store=None)
+    resp = client.post("/api/hits/clear")
+    assert resp.status_code == 200
+    assert resp.json() == {"cleared": 0}
+
+
 def test_index_shows_current_min_confidence():
     client = _client(settings=RuntimeSettings(min_confidence=0.65))
     resp = client.get("/")

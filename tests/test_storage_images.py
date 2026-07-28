@@ -1,6 +1,6 @@
 import numpy as np
 
-from carma.storage.images import save_hit_images
+from carma.storage.images import clear_images, save_hit_images
 
 
 def test_saves_both_images_and_returns_filenames(tmp_path):
@@ -33,3 +33,20 @@ def test_filenames_are_unique_across_calls(tmp_path):
     second = save_hit_images(frame, frame, str(images_dir))
 
     assert first != second
+
+
+def test_clear_images_removes_all_files(tmp_path):
+    frame = np.zeros((5, 5, 3), dtype=np.uint8)
+    images_dir = tmp_path / "images"
+    save_hit_images(frame, frame, str(images_dir))
+    save_hit_images(frame, frame, str(images_dir))
+    assert len(list(images_dir.iterdir())) == 4
+
+    clear_images(str(images_dir))
+
+    assert list(images_dir.iterdir()) == []
+    assert images_dir.is_dir()  # directory itself stays
+
+
+def test_clear_images_on_missing_dir_does_not_raise(tmp_path):
+    clear_images(str(tmp_path / "does-not-exist"))  # must not raise

@@ -41,3 +41,31 @@ def test_recent_on_empty_store(tmp_path):
     store = HitStore(str(tmp_path / "carma.db"))
     assert store.recent() == []
     store.close()
+
+
+def test_count(tmp_path):
+    store = HitStore(str(tmp_path / "carma.db"))
+    assert store.count() == 0
+    store.insert("t0", "123ABC02", 0.9, "KZ", False, "f0.jpg", "c0.jpg")
+    store.insert("t1", "A123BC77", 0.8, "RU", False, "f1.jpg", "c1.jpg")
+    assert store.count() == 2
+    store.close()
+
+
+def test_clear_removes_all_rows(tmp_path):
+    store = HitStore(str(tmp_path / "carma.db"))
+    store.insert("t0", "123ABC02", 0.9, "KZ", False, "f0.jpg", "c0.jpg")
+    store.insert("t1", "A123BC77", 0.8, "RU", False, "f1.jpg", "c1.jpg")
+
+    store.clear()
+
+    assert store.count() == 0
+    assert store.recent() == []
+    store.close()
+
+
+def test_clear_on_empty_store_does_not_raise(tmp_path):
+    store = HitStore(str(tmp_path / "carma.db"))
+    store.clear()  # must not raise
+    assert store.count() == 0
+    store.close()

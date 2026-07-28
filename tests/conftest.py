@@ -92,3 +92,9 @@ class FakeHitStore:
             )
             for i, (t, p, c, f, w, ff, cf) in enumerate(rows)
         ]
+
+    def count(self) -> int:
+        return len(self.inserted)
+
+    def clear(self) -> None:
+        self.inserted = []
