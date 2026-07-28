@@ -118,13 +118,23 @@ normal development):
 sudo nmcli con down carma-ap && sudo nmcli con up <your-home-wifi-profile>
 ```
 
-**4. Only once you're actually deploying** in the field (no known Wi-Fi
-around, no one there to fix a stuck network), make the AP come up on its
-own after a power cycle:
+**4. Automatic fallback for field deployment.** `scripts/install.sh`
+installs and enables `carma-ap-fallback.service`, which runs once at every
+boot: it waits up to 45s (`CARMA_WIFI_TIMEOUT`, see the unit file) for
+`wlan0` to reach a normal client connection, and only if that doesn't
+happen does it bring up `carma-ap`. This means the device keeps using your
+regular Wi-Fi whenever it's in range, and only serves its own hotspot when
+it can't reach a known network -- no need to flip `autoconnect` by hand,
+and no risk of the AP profile fighting your home Wi-Fi profile for
+activation on every boot.
+
+Leave `carma-ap` at `autoconnect no` (the default from step 1) -- the
+fallback service is what brings it up, not NetworkManager's own
+autoconnect logic. Check it with:
 
 ```sh
-sudo nmcli con modify carma-ap autoconnect yes
-sudo nmcli con modify carma-ap connection.autoconnect-priority 10
+systemctl status carma-ap-fallback
+journalctl -u carma-ap-fallback -b
 ```
 
 ## Development (off-Pi)

@@ -60,10 +60,12 @@ HOME="$INSTALL_DIR" "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/scripts/fetch_
 mkdir -p "$INSTALL_DIR/data/images" "$INSTALL_DIR/models"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
-echo "==> installing systemd unit"
+echo "==> installing systemd units"
+chmod +x "$INSTALL_DIR/scripts/carma-ap-fallback.sh"
 cp "$INSTALL_DIR/systemd/carma.service" /etc/systemd/system/carma.service
+cp "$INSTALL_DIR/systemd/carma-ap-fallback.service" /etc/systemd/system/carma-ap-fallback.service
 systemctl daemon-reload
-systemctl enable carma
+systemctl enable carma carma-ap-fallback
 
 cat <<MSG
 ==> done.
