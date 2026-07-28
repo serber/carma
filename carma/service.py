@@ -1,7 +1,5 @@
-# Main loop: wires capture -> motion -> detect -> ocr -> storage, and
-# starts the dashboard. Entry point used by carma/__main__.py.
-#
-# TODO(stage 4): dedup, watchlist highlight, polish.
+# Main loop: wires capture -> motion -> detect -> ocr -> dedup -> storage,
+# and starts the dashboard. Entry point used by carma/__main__.py.
 import logging
 import sys
 
@@ -12,7 +10,9 @@ from carma.capture_loop import CaptureLoop
 from carma.config import ConfigError, load_config
 from carma.counters import Counters
 from carma.logging_setup import configure_logging
+from carma.pipeline.dedup import Deduper
 from carma.pipeline.motion import MotionDetector
+from carma.pipeline.watchlist import Watchlist
 from carma.selfcheck import check_camera, check_model, check_ocr, check_storage
 from carma.web.app import create_app
 
@@ -43,6 +43,8 @@ def run(config_path: str) -> int:
     motion_detector = MotionDetector(
         config.motion.threshold, config.motion.min_area, config.motion.roi
     )
+    deduper = Deduper(config.dedup.window_seconds)
+    watchlist = Watchlist(config.watchlist.enabled, config.watchlist.plates)
 
     counters = Counters()
     capture_loop = CaptureLoop(
@@ -53,6 +55,8 @@ def run(config_path: str) -> int:
         plate_reader,
         hit_store,
         config.storage.images_dir,
+        deduper,
+        watchlist,
     )
     if camera_ok:
         capture_loop.start()

@@ -24,11 +24,14 @@ _Filled in as each piece lands — see build order in SPEC.md._
       to open you'll see a red "camera unavailable" placeholder instead of
       a crash, and `frames_captured` stays at 0 on `/api/status`
 - [x] Browse plate reads at `/hits` — timestamp, plate string, KZ/RU/unknown
-      format tag, confidence, and the cropped plate image (click through to
-      the full frame)
+      format tag, confidence, watchlist match (highlighted red with a ⚠ if
+      `watchlist.enabled` and it matches a configured plate/substring), and
+      the cropped plate image (click through to the full frame)
 - [x] `journalctl -u carma -f` to watch structured logs — every module logs
       via its own name (`carma.capture.picamera2_source`, `carma.web.app`,
-      ...) so the log line tells you which stage is talking
+      ...) so the log line tells you which stage is talking; the same
+      recent lines are also on the `/` dashboard (no SSH needed for a
+      quick look) along with CPU temperature and FPS
 
 ## Wi-Fi access point
 

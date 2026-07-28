@@ -1,7 +1,6 @@
-# FastAPI dashboard: MJPEG live preview + per-stage counters + browsable
-# recent hits. Served at http://192.168.4.1:8000 over the Pi's own AP (see
-# README).
-# TODO(stage 4): watchlist highlight, CPU temp, log tail.
+# FastAPI dashboard: MJPEG live preview + per-stage counters + CPU temp +
+# log tail + browsable recent hits (watchlist matches highlighted). Served
+# at http://192.168.4.1:8000 over the Pi's own AP (see README).
 from __future__ import annotations
 
 import html
@@ -11,12 +10,19 @@ from pathlib import Path
 import cv2
 import numpy as np
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
+from carma.logging_setup import get_recent_logs
 from carma.storage.db import Hit, HitStore
+from carma.sysinfo import cpu_temperature_celsius
 
 MJPEG_BOUNDARY = "frame"
 
@@ -42,8 +48,13 @@ def create_app(
     def status() -> JSONResponse:
         data = counters.snapshot()
         data["fps"] = round(capture_loop.fps, 1)
+        data["cpu_temp_celsius"] = cpu_temperature_celsius()
         data["self_check"] = self_check
         return JSONResponse(data)
+
+    @app.get("/api/log", response_class=PlainTextResponse)
+    def log() -> str:
+        return "\n".join(get_recent_logs())
 
     @app.get("/stream.mjpg")
     def stream() -> StreamingResponse:
@@ -93,7 +104,8 @@ def _render_index(self_check: dict[str, bool]) -> str:
   <style>
     body {{ font-family: sans-serif; background: #111; color: #eee; }}
     img {{ max-width: 100%; border: 1px solid #333; display: block; }}
-    pre {{ font-family: monospace; }}
+    pre {{ font-family: monospace; white-space: pre-wrap; word-break: break-all; }}
+    #log {{ max-height: 300px; overflow-y: auto; background: #000; padding: 8px; }}
     a {{ color: #6cf; }}
   </style>
 </head>
@@ -104,11 +116,17 @@ def _render_index(self_check: dict[str, bool]) -> str:
   <img src="/stream.mjpg" alt="live preview">
   <h2>Counters</h2>
   <pre id="counters">loading...</pre>
+  <h2>Log tail</h2>
+  <pre id="log">loading...</pre>
   <script>
     async function poll() {{
       const r = await fetch('/api/status');
       document.getElementById('counters').textContent =
         JSON.stringify(await r.json(), null, 2);
+      const logEl = document.getElementById('log');
+      const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 5;
+      logEl.textContent = await (await fetch('/api/log')).text();
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
     }}
     setInterval(poll, 1000);
     poll();
@@ -119,14 +137,15 @@ def _render_index(self_check: dict[str, bool]) -> str:
 
 def _render_hits(hits: list[Hit]) -> str:
     if not hits:
-        rows = '<tr><td colspan="5">no hits yet</td></tr>'
+        rows = '<tr><td colspan="6">no hits yet</td></tr>'
     else:
         rows = "".join(
-            "<tr>"
+            f'<tr class="{"watchlist-match" if hit.watchlist_match else ""}">'
             f"<td>{html.escape(hit.timestamp)}</td>"
-            f"<td>{html.escape(hit.plate)}</td>"
+            f'<td>{"&#9888; " if hit.watchlist_match else ""}{html.escape(hit.plate)}</td>'
             f"<td>{html.escape(hit.format)}</td>"
             f"<td>{hit.confidence:.2f}</td>"
+            f"<td>{'yes' if hit.watchlist_match else ''}</td>"
             f'<td><a href="/images/{html.escape(hit.frame_filename)}">'
             f'<img src="/images/{html.escape(hit.crop_filename)}" '
             f'alt="{html.escape(hit.plate)}"></a></td>'
@@ -144,13 +163,14 @@ def _render_hits(hits: list[Hit]) -> str:
     td, th {{ border: 1px solid #333; padding: 4px 8px; text-align: left; }}
     img {{ max-height: 60px; display: block; }}
     a {{ color: #6cf; }}
+    tr.watchlist-match {{ background: #533; }}
   </style>
 </head>
 <body>
   <h1>carma — recent hits</h1>
   <p><a href="/">&larr; live view</a></p>
   <table>
-    <tr><th>timestamp</th><th>plate</th><th>format</th><th>confidence</th><th>crop (click for full frame)</th></tr>
+    <tr><th>timestamp</th><th>plate</th><th>format</th><th>confidence</th><th>watchlist</th><th>crop (click for full frame)</th></tr>
     {rows}
   </table>
 </body>

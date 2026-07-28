@@ -74,17 +74,21 @@ class FakeHitStore:
         plate: str,
         confidence: float,
         format_: str,
+        watchlist_match: bool,
         frame_filename: str,
         crop_filename: str,
     ) -> int:
         self.inserted.append(
-            (timestamp, plate, confidence, format_, frame_filename, crop_filename)
+            (timestamp, plate, confidence, format_, watchlist_match, frame_filename, crop_filename)
         )
         return len(self.inserted)
 
     def recent(self, limit: int = 50) -> list[Hit]:
         rows = list(reversed(self.inserted))[:limit]
         return [
-            Hit(id=i, timestamp=t, plate=p, confidence=c, format=f, frame_filename=ff, crop_filename=cf)
-            for i, (t, p, c, f, ff, cf) in enumerate(rows)
+            Hit(
+                id=i, timestamp=t, plate=p, confidence=c, format=f,
+                watchlist_match=w, frame_filename=ff, crop_filename=cf,
+            )
+            for i, (t, p, c, f, w, ff, cf) in enumerate(rows)
         ]

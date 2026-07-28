@@ -4,7 +4,9 @@ from fastapi.testclient import TestClient
 
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
+from carma.pipeline.dedup import Deduper
 from carma.pipeline.motion import MotionDetector
+from carma.pipeline.watchlist import Watchlist
 from carma.web.app import _mjpeg_generator, create_app
 from tests.conftest import FakeHitStore, FakeSource
 
@@ -14,7 +16,8 @@ def _client(camera_ok: bool = True, model_ok: bool = True, hit_store=None) -> Te
     counters = Counters()
     counters.increment("frames_captured", by=5)
     loop = CaptureLoop(
-        source, counters, MotionDetector(threshold=25, min_area=500), None, None, None, "unused"
+        source, counters, MotionDetector(threshold=25, min_area=500), None, None, None,
+        "unused", Deduper(window_seconds=0), Watchlist(enabled=False, plates=[]),
     )
     self_check = {
         "config": True, "camera": camera_ok, "model": model_ok, "ocr": True, "storage": True,
@@ -33,6 +36,13 @@ def test_index_lists_self_check():
     assert "model: OK" in resp.text
 
 
+def test_index_includes_log_tail_section():
+    client = _client()
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'id="log"' in resp.text
+
+
 def test_status_reports_counters_and_self_check():
     client = _client()
     resp = client.get("/api/status")
@@ -43,6 +53,14 @@ def test_status_reports_counters_and_self_check():
         "config": True, "camera": True, "model": True, "ocr": True, "storage": True,
     }
     assert "fps" in data
+    assert "cpu_temp_celsius" in data
+
+
+def test_log_endpoint_returns_text():
+    client = _client()
+    resp = client.get("/api/log")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
 
 
 def test_hits_page_with_no_store_shows_empty_state():
@@ -54,7 +72,7 @@ def test_hits_page_with_no_store_shows_empty_state():
 
 def test_hits_page_lists_recent_hits():
     hit_store = FakeHitStore()
-    hit_store.insert("2026-07-28T12:00:00+00:00", "123ABC02", 0.91, "KZ", "f1.jpg", "c1.jpg")
+    hit_store.insert("2026-07-28T12:00:00+00:00", "123ABC02", 0.91, "KZ", False, "f1.jpg", "c1.jpg")
     client = _client(hit_store=hit_store)
 
     resp = client.get("/hits")
@@ -63,6 +81,16 @@ def test_hits_page_lists_recent_hits():
     assert "KZ" in resp.text
     assert "/images/c1.jpg" in resp.text
     assert "/images/f1.jpg" in resp.text
+
+
+def test_hits_page_highlights_watchlist_matches():
+    hit_store = FakeHitStore()
+    hit_store.insert("2026-07-28T12:00:00+00:00", "123ABC02", 0.91, "KZ", True, "f1.jpg", "c1.jpg")
+    client = _client(hit_store=hit_store)
+
+    resp = client.get("/hits")
+    assert resp.status_code == 200
+    assert "watchlist-match" in resp.text
 
 
 def test_mjpeg_generator_falls_back_to_placeholder_when_no_frame():

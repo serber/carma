@@ -128,10 +128,40 @@ hit and confirmed `/hits` renders it with a working `/images/...` link.
 
 ## Stage 4 — Dedup, watchlist, polish
 
-- [ ] 24. `pipeline/dedup.py`: per-plate time-window dedup.
-- [ ] 25. Watchlist: config + highlight matching hits on the dashboard.
-- [ ] 26. Dashboard: CPU temperature, FPS, log tail.
-- [ ] 27. Polish: error handling at pipeline boundaries, edge cases.
+- [x] 24. `pipeline/dedup.py`: `Deduper` — tracks last-*recorded* time per
+      plate (not last-seen), so a continuously-visible plate is stored
+      once per `dedup.window_seconds`, not on every frame it's re-read.
+      OCR still runs (and `ocr_reads` still counts) on every read; only
+      the storage write is suppressed for repeats.
+- [x] 25. `pipeline/watchlist.py`: `Watchlist` — full/partial substring
+      match against `watchlist.plates` (normalized through the same
+      Cyrillic-homoglyph map as OCR output, so a Cyrillic-typed entry
+      still matches). Every hit is still stored regardless of match (spec
+      says "flag/highlight", not filter); `watchlist_match` is a new
+      `HitStore` column. `/hits` highlights matching rows (red background
+      + ⚠ marker + a dedicated column).
+- [x] 26. Dashboard: `cpu_temp_celsius` in `/api/status` (reads
+      `/sys/class/thermal/thermal_zone0/temp`, `None` off-Pi rather than
+      crashing -- see `carma/sysinfo.py`); FPS was already in
+      `/api/status` since stage 1. Log tail: `logging_setup.py` now
+      attaches a second in-memory ring-buffer handler alongside the
+      stream handler, exposed via `/api/log` and polled into a scrolling
+      `<pre>` on `/`.
+- [x] 27. Polish: `CaptureLoop._run()` now catches exceptions around both
+      `source.read()` and the process/encode step, logs them, and keeps
+      looping -- previously an unhandled exception (bad frame, transient
+      DB error, etc.) would silently kill the capture thread while the
+      dashboard kept running and showing stale counters forever, exactly
+      the "turned it on, nothing happens, can't tell why" failure mode
+      SPEC.md designs against. Covered by
+      `test_bad_frame_does_not_kill_the_loop`.
+
+Verified end-to-end: smoke-tested with `watchlist.enabled: true` and a
+matching entry -- inserted one matching and one non-matching hit directly,
+confirmed `/hits` shows the match highlighted (⚠, red row, "yes" column)
+and the other hit unstyled; confirmed `/api/status` carries
+`cpu_temp_celsius` (`null` off-Pi, as expected) and `/api/log` returns
+real recent log lines. 98 tests passing, all four stages complete.
 
 ## Open questions
 

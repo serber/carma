@@ -1,7 +1,7 @@
 # Background thread that continuously pulls frames from a FrameSource, runs
-# them through motion -> detection -> ocr -> storage, and keeps the latest
-# frame JPEG-encoded (with any detection boxes drawn) ready for the
-# dashboard's MJPEG stream.
+# them through motion -> detection -> ocr -> dedup -> storage, and keeps
+# the latest frame JPEG-encoded (with any detection boxes drawn) ready for
+# the dashboard's MJPEG stream.
 from __future__ import annotations
 
 import logging
@@ -13,9 +13,11 @@ import numpy as np
 
 from carma.capture.base import FrameSource
 from carma.counters import Counters
+from carma.pipeline.dedup import Deduper
 from carma.pipeline.detect import Box, PlateDetector
 from carma.pipeline.motion import MotionDetector
 from carma.pipeline.ocr import PlateReader
+from carma.pipeline.watchlist import Watchlist
 from carma.storage.db import HitStore
 from carma.storage.images import save_hit_images
 
@@ -35,6 +37,8 @@ class CaptureLoop:
         plate_reader: PlateReader | None,
         hit_store: HitStore | None,
         images_dir: str,
+        deduper: Deduper,
+        watchlist: Watchlist,
     ) -> None:
         self._source = source
         self._counters = counters
@@ -43,6 +47,8 @@ class CaptureLoop:
         self._plate_reader = plate_reader
         self._hit_store = hit_store
         self._images_dir = images_dir
+        self._deduper = deduper
+        self._watchlist = watchlist
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._frame_lock = threading.Lock()
@@ -70,13 +76,26 @@ class CaptureLoop:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            frame = self._source.read()
+            try:
+                frame = self._source.read()
+            except Exception:
+                # A flaky driver raising instead of returning None must not
+                # silently kill the capture thread -- that's exactly the
+                # "turned it on, nothing happens, can't tell why" failure
+                # mode the dashboard exists to prevent.
+                logger.exception("error reading frame; continuing")
+                self._stop_event.wait(0.05)
+                continue
+
             if frame is None:
                 self._stop_event.wait(0.05)
                 continue
             self._counters.increment("frames_captured")
-            boxes = self._process(frame)
-            self._encode(frame, boxes)
+            try:
+                boxes = self._process(frame)
+                self._encode(frame, boxes)
+            except Exception:
+                logger.exception("error processing frame; continuing")
 
     def _process(self, frame: np.ndarray) -> list[Box]:
         if not self._motion_detector.update(frame):
@@ -105,12 +124,17 @@ class CaptureLoop:
         plate, confidence, plate_format = result
         self._counters.increment("ocr_reads")
 
+        if not self._deduper.should_record(plate):
+            return
         if self._hit_store is None:
             return
+
+        watchlist_match = self._watchlist.matches(plate)
         frame_filename, crop_filename = save_hit_images(frame, crop, self._images_dir)
         timestamp = datetime.now(UTC).isoformat()
         self._hit_store.insert(
-            timestamp, plate, confidence, plate_format, frame_filename, crop_filename
+            timestamp, plate, confidence, plate_format, watchlist_match,
+            frame_filename, crop_filename,
         )
 
     def _encode(self, frame: np.ndarray, boxes: list[Box]) -> None:
