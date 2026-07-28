@@ -18,6 +18,7 @@ from carma.pipeline.detect import Box, PlateDetector
 from carma.pipeline.motion import MotionDetector
 from carma.pipeline.ocr import PlateReader
 from carma.pipeline.watchlist import Watchlist
+from carma.settings import RuntimeSettings
 from carma.storage.db import HitStore
 from carma.storage.images import save_hit_images
 
@@ -39,6 +40,7 @@ class CaptureLoop:
         images_dir: str,
         deduper: Deduper,
         watchlist: Watchlist,
+        settings: RuntimeSettings,
     ) -> None:
         self._source = source
         self._counters = counters
@@ -49,6 +51,7 @@ class CaptureLoop:
         self._images_dir = images_dir
         self._deduper = deduper
         self._watchlist = watchlist
+        self._settings = settings
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._frame_lock = threading.Lock()
@@ -121,9 +124,15 @@ class CaptureLoop:
         plate, confidence, plate_format = result
         self._counters.increment("ocr_reads")
 
-        # Dedup only gates storage -- the live overlay should still show
-        # every read, even a repeat of a plate that's sitting in frame.
-        if self._hit_store is not None and self._deduper.should_record(plate):
+        # min_confidence and dedup only gate storage -- the live overlay
+        # still shows every read regardless. Confidence is checked before
+        # dedup so a below-threshold read never consumes the dedup slot
+        # and blocks a good read of the same plate moments later.
+        if (
+            self._hit_store is not None
+            and confidence >= self._settings.min_confidence
+            and self._deduper.should_record(plate)
+        ):
             watchlist_match = self._watchlist.matches(plate)
             frame_filename, crop_filename = save_hit_images(frame, crop, self._images_dir)
             timestamp = datetime.now(UTC).isoformat()

@@ -76,6 +76,11 @@ class DashboardConfig:
 class StorageConfig:
     db_path: str = "data/carma.db"
     images_dir: str = "data/images"
+    # OCR reads below this confidence aren't stored (still shown live on
+    # the MJPEG overlay -- this only trims what gets written). 0 = store
+    # everything. Adjustable live from the dashboard without a restart;
+    # this is just the value at startup -- see carma/settings.py.
+    min_confidence: float = 0.0
 
 
 @dataclasses.dataclass
@@ -192,6 +197,9 @@ def load_config(path: str | Path) -> Config:
 
     if not (1 <= dashboard.port <= 65535):
         raise ConfigError(f"{path}: dashboard.port must be a valid TCP port")
+
+    if not (0.0 <= storage.min_confidence <= 1.0):
+        raise ConfigError(f"{path}: storage.min_confidence must be between 0 and 1")
 
     log_level = str(log_level).upper()
     if log_level not in VALID_LOG_LEVELS:

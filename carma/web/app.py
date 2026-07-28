@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import time
 from pathlib import Path
 
@@ -17,12 +18,21 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
+from carma.settings import RuntimeSettings
 from carma.storage.db import Hit, HitStore
 from carma.sysinfo import cpu_temperature_celsius
+
+logger = logging.getLogger(__name__)
+
+
+class SettingsUpdate(BaseModel):
+    min_confidence: float = Field(ge=0.0, le=1.0)
+
 
 MJPEG_BOUNDARY = "frame"
 
@@ -33,6 +43,7 @@ def create_app(
     self_check: dict[str, bool],
     hit_store: HitStore | None,
     images_dir: str,
+    settings: RuntimeSettings,
 ) -> FastAPI:
     app = FastAPI(title="carma")
     unavailable_jpeg = _placeholder_jpeg("camera unavailable - see logs")
@@ -42,7 +53,17 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _render_index(self_check)
+        return _render_index(self_check, settings.min_confidence)
+
+    @app.get("/api/settings")
+    def get_settings() -> JSONResponse:
+        return JSONResponse({"min_confidence": settings.min_confidence})
+
+    @app.post("/api/settings")
+    def update_settings(body: SettingsUpdate) -> JSONResponse:
+        settings.min_confidence = body.min_confidence
+        logger.info("min_confidence set to %.2f via dashboard", body.min_confidence)
+        return JSONResponse({"min_confidence": settings.min_confidence})
 
     @app.get("/api/status")
     def status() -> JSONResponse:
@@ -193,6 +214,17 @@ _STYLE = """
     .meter > span { display: block; height: 100%; background: var(--accent); }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .settings-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .settings-row input[type="range"] { accent-color: var(--accent); flex: 1 1 160px; }
+    .settings-row output { font-variant-numeric: tabular-nums; min-width: 3.5em; }
+    .settings-row button {
+      background: var(--accent); color: #fff; border: none; border-radius: 6px;
+      padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .settings-row button:hover { opacity: 0.9; }
+    .settings-row .saved { color: var(--good); font-size: 13px; opacity: 0; transition: opacity 0.2s; }
+    .settings-row .saved.show { opacity: 1; }
+    .hint { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
 """
 
 
@@ -222,7 +254,7 @@ def _page(title: str, active: str, body: str) -> str:
 </html>"""
 
 
-def _render_index(self_check: dict[str, bool]) -> str:
+def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
     badges = "".join(
         f'<span class="badge{"" if ok else " fail"}">'
         f'<span class="dot"></span>{html.escape(name)}: {"OK" if ok else "FAILED"}'
@@ -242,6 +274,21 @@ def _render_index(self_check: dict[str, bool]) -> str:
       </div>
     </div>
     <div class="card">
+      <h2>Storage settings</h2>
+      <div class="settings-row">
+        <label for="min-confidence">Minimum confidence to store a hit</label>
+        <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
+        <output id="min-confidence-value">{min_confidence:.2f}</output>
+        <button id="save-settings" type="button">Save</button>
+        <span class="saved" id="settings-saved">Saved</span>
+      </div>
+      <p class="hint">
+        Reads below this confidence still show live on the preview and count
+        toward OCR reads -- they just aren't written to <a href="/hits">Hits</a>.
+        0 stores everything.
+      </p>
+    </div>
+    <div class="card">
       <h2>Counters</h2>
       <div class="stat-grid">
         <div class="stat-tile"><div class="value" id="stat-frames">&ndash;</div><div class="label">Frames captured</div></div>
@@ -257,6 +304,22 @@ def _render_index(self_check: dict[str, bool]) -> str:
       <div id="log">loading&hellip;</div>
     </div>
     <script>
+      const minConfidenceInput = document.getElementById('min-confidence');
+      const minConfidenceValue = document.getElementById('min-confidence-value');
+      minConfidenceInput.addEventListener('input', () => {{
+        minConfidenceValue.textContent = parseFloat(minConfidenceInput.value).toFixed(2);
+      }});
+      document.getElementById('save-settings').addEventListener('click', async () => {{
+        await fetch('/api/settings', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{min_confidence: parseFloat(minConfidenceInput.value)}}),
+        }});
+        const saved = document.getElementById('settings-saved');
+        saved.classList.add('show');
+        setTimeout(() => saved.classList.remove('show'), 1500);
+      }});
+
       function tempClass(t) {{
         if (t === null || t === undefined) return '';
         if (t >= 80) return 'critical';

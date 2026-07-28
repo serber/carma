@@ -84,3 +84,15 @@ def test_ocr_model_name_accepts_local_onnx_path(tmp_path):
 
     config = load_config(path)
     assert config.ocr.model_name == str(model_file)
+
+
+def test_storage_min_confidence_default_is_zero():
+    config = load_config(EXAMPLE)
+    assert config.storage.min_confidence == 0.0
+
+
+def test_invalid_storage_min_confidence(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("storage:\n  min_confidence: 1.5\n")
+    with pytest.raises(ConfigError, match="storage.min_confidence"):
+        load_config(path)

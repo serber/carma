@@ -14,6 +14,7 @@ from carma.pipeline.dedup import Deduper
 from carma.pipeline.motion import MotionDetector
 from carma.pipeline.watchlist import Watchlist
 from carma.selfcheck import check_camera, check_model, check_ocr, check_storage
+from carma.settings import RuntimeSettings
 from carma.web.app import create_app
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ def run(config_path: str) -> int:
     )
     deduper = Deduper(config.dedup.window_seconds)
     watchlist = Watchlist(config.watchlist.enabled, config.watchlist.plates)
+    settings = RuntimeSettings(config.storage.min_confidence)
 
     counters = Counters()
     capture_loop = CaptureLoop(
@@ -57,6 +59,7 @@ def run(config_path: str) -> int:
         config.storage.images_dir,
         deduper,
         watchlist,
+        settings,
     )
     if camera_ok:
         capture_loop.start()
@@ -73,7 +76,9 @@ def run(config_path: str) -> int:
         "ocr": plate_reader is not None,
         "storage": hit_store is not None,
     }
-    app = create_app(capture_loop, counters, self_check, hit_store, config.storage.images_dir)
+    app = create_app(
+        capture_loop, counters, self_check, hit_store, config.storage.images_dir, settings
+    )
 
     logger.info(
         "dashboard starting host=%s port=%s",

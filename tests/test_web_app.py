@@ -7,23 +7,27 @@ from carma.counters import Counters
 from carma.pipeline.dedup import Deduper
 from carma.pipeline.motion import MotionDetector
 from carma.pipeline.watchlist import Watchlist
+from carma.settings import RuntimeSettings
 from carma.web.app import _mjpeg_generator, create_app
 from tests.conftest import FakeHitStore, FakeSource
 
 
-def _client(camera_ok: bool = True, model_ok: bool = True, hit_store=None) -> TestClient:
+def _client(
+    camera_ok: bool = True, model_ok: bool = True, hit_store=None, settings=None,
+) -> TestClient:
     source = FakeSource()
     counters = Counters()
     counters.increment("frames_captured", by=5)
+    settings = settings or RuntimeSettings(min_confidence=0.0)
     loop = CaptureLoop(
         source, counters, MotionDetector(threshold=25, min_area=500), None, None, None,
-        "unused", Deduper(window_seconds=0), Watchlist(enabled=False, plates=[]),
+        "unused", Deduper(window_seconds=0), Watchlist(enabled=False, plates=[]), settings,
     )
     self_check = {
         "config": True, "camera": camera_ok, "model": model_ok, "ocr": True, "storage": True,
     }
     images_dir = tempfile.mkdtemp()
-    app = create_app(loop, counters, self_check, hit_store, images_dir)
+    app = create_app(loop, counters, self_check, hit_store, images_dir, settings)
     return TestClient(app)
 
 
@@ -91,6 +95,40 @@ def test_hits_page_highlights_watchlist_matches():
     resp = client.get("/hits")
     assert resp.status_code == 200
     assert "watchlist-match" in resp.text
+
+
+def test_index_shows_current_min_confidence():
+    client = _client(settings=RuntimeSettings(min_confidence=0.65))
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'value="0.65"' in resp.text
+    assert "0.65" in resp.text
+
+
+def test_get_settings_returns_current_value():
+    client = _client(settings=RuntimeSettings(min_confidence=0.3))
+    resp = client.get("/api/settings")
+    assert resp.status_code == 200
+    assert resp.json() == {"min_confidence": 0.3}
+
+
+def test_post_settings_updates_value():
+    settings = RuntimeSettings(min_confidence=0.0)
+    client = _client(settings=settings)
+
+    resp = client.post("/api/settings", json={"min_confidence": 0.75})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"min_confidence": 0.75}
+    assert settings.min_confidence == 0.75
+
+
+def test_post_settings_rejects_out_of_range_value():
+    client = _client(settings=RuntimeSettings(min_confidence=0.2))
+
+    resp = client.post("/api/settings", json={"min_confidence": 1.5})
+
+    assert resp.status_code == 422
 
 
 def test_mjpeg_generator_falls_back_to_placeholder_when_no_frame():

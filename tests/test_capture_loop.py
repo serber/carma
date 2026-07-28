@@ -8,6 +8,7 @@ from carma.counters import Counters
 from carma.pipeline.dedup import Deduper
 from carma.pipeline.motion import MotionDetector
 from carma.pipeline.watchlist import Watchlist
+from carma.settings import RuntimeSettings
 from tests.conftest import FakeHitStore, FakePlateDetector, FakePlateReader, FakeSource
 
 
@@ -37,11 +38,12 @@ def _wait_until(predicate, timeout: float = 2.0) -> None:
 
 def _make_loop(
     source, counters, motion_detector, plate_detector=None, plate_reader=None,
-    hit_store=None, images_dir="unused", deduper=None, watchlist=None,
+    hit_store=None, images_dir="unused", deduper=None, watchlist=None, settings=None,
 ) -> CaptureLoop:
     return CaptureLoop(
         source, counters, motion_detector, plate_detector, plate_reader, hit_store,
         images_dir, deduper or _no_dedup(), watchlist or _no_watchlist(),
+        settings or RuntimeSettings(min_confidence=0.0),
     )
 
 
@@ -302,3 +304,85 @@ def test_bad_frame_does_not_kill_the_loop():
     # the loop kept running (frames_captured kept incrementing) despite the
     # first call raising
     assert counters.snapshot()["frames_captured"] > 2
+
+
+def test_below_min_confidence_read_is_not_stored(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.3, "KZ"))
+    hit_store = FakeHitStore()
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader, hit_store,
+        str(tmp_path / "images"), settings=RuntimeSettings(min_confidence=0.5),
+    )
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["ocr_reads"] > 0)
+    loop.stop()
+
+    assert counters.snapshot()["ocr_reads"] > 0  # OCR still ran
+    assert len(hit_store.inserted) == 0  # but below threshold, not stored
+
+
+def test_at_or_above_min_confidence_read_is_stored(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.5, "KZ"))
+    hit_store = FakeHitStore()
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader, hit_store,
+        str(tmp_path / "images"), settings=RuntimeSettings(min_confidence=0.5),
+    )
+
+    loop.start()
+    _wait_until(lambda: len(hit_store.inserted) > 0)
+    loop.stop()
+
+    assert len(hit_store.inserted) > 0
+
+
+def test_overlay_shows_plate_even_below_min_confidence(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.1, "KZ"))
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        FakeHitStore(), str(tmp_path / "images"), settings=RuntimeSettings(min_confidence=0.9),
+    )
+
+    loop._process(frame)  # first call just seeds the motion baseline
+    detections = loop._process(frame)
+
+    assert detections == [((1, 1, 4, 4, 0.9), "123ABC02")]
+
+
+def test_low_confidence_read_does_not_block_dedup_for_later_good_read(tmp_path):
+    # a below-threshold read must not consume the dedup slot, or a good
+    # read of the same plate moments later would get wrongly suppressed
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    hit_store = FakeHitStore()
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector,
+        FakePlateReader(result=("123ABC02", 0.2, "KZ")), hit_store,
+        str(tmp_path / "images"), deduper=Deduper(window_seconds=9999),
+        settings=RuntimeSettings(min_confidence=0.5),
+    )
+
+    loop._process(frame)  # first call just seeds the motion baseline
+
+    loop._process(frame)  # below threshold: not stored, dedup untouched
+    assert len(hit_store.inserted) == 0
+
+    loop._plate_reader = FakePlateReader(result=("123ABC02", 0.9, "KZ"))
+    loop._process(frame)  # now above threshold: should still be stored
+
+    assert len(hit_store.inserted) == 1
