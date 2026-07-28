@@ -11,14 +11,18 @@ _Filled in as each piece lands — see build order in SPEC.md._
 
 - [ ] Flash Raspberry Pi OS Lite (64-bit, Trixie)
 - [ ] Wire the CSI camera ribbon cable
-- [x] Wi-Fi access-point setup (fixed IP `192.168.4.1`) — see
-      [Wi-Fi access point](#wi-fi-access-point) below
 - [x] Install carma (`sudo scripts/install.sh`) — creates the `carma` user,
       a venv at `/opt/carma/.venv` (with `--system-site-packages` for
       picamera2), seeds `config.yaml`, pre-downloads the plate-detector and
       OCR models (needs internet once — see `scripts/fetch_models.py`),
       installs + enables the systemd unit
-- [ ] Power on, join the Pi's Wi-Fi, open `http://192.168.4.1:8000`
+- [ ] Power on. **While developing**, leave the Pi joined to your regular
+      Wi-Fi and open `http://<pi-ip>:8000` (`dashboard.host: 0.0.0.0`
+      already listens on every interface, no AP needed — find the IP via
+      your router or `ssh <user>@<hostname>.local`). **For field
+      deployment**, switch to the AP instead — see
+      [Wi-Fi access point](#wi-fi-access-point) below, then open
+      `http://192.168.4.1:8000`
 - [x] Confirm the live MJPEG preview and aim the camera — dashboard serves
       `/stream.mjpg` with detection boxes drawn on it; if the camera fails
       to open you'll see a red "camera unavailable" placeholder instead of
@@ -35,35 +39,57 @@ _Filled in as each piece lands — see build order in SPEC.md._
 
 ## Wi-Fi access point
 
+**Not needed for development.** carma listens on `0.0.0.0`, so while the
+Pi is a normal Wi-Fi client on your network the dashboard is already
+reachable at `http://<pi-ip>:8000` — no AP setup required. Only set this
+up when you're ready to deploy in the field, away from any known Wi-Fi.
+
 Raspberry Pi OS switched to **NetworkManager** as the default network stack
 starting with Bookworm (Trixie too) — it can run the AP itself, so there's
 no need for separate `hostapd`/`dnsmasq` services fighting NetworkManager
 for control of `wlan0`. Fewer moving parts matters here: this device won't
 have anyone around to fix a broken network stack.
 
-Do this **after** `scripts/install.sh` (which needs internet — run it while
-the Pi is still joined to your regular Wi-Fi or on Ethernet). Once the AP
-profile is up, the Pi no longer needs a route to the internet.
+**1. Create the AP profile (one-time, doesn't affect your current network).**
+`autoconnect no` for now on purpose — this keeps it from fighting your
+regular Wi-Fi profile for activation on every boot while you're still
+developing:
 
 ```sh
-sudo nmcli con add type wifi ifname wlan0 con-name carma-ap autoconnect yes ssid carma
+sudo nmcli con add type wifi ifname wlan0 con-name carma-ap autoconnect no ssid carma
 sudo nmcli con modify carma-ap 802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 7
 sudo nmcli con modify carma-ap wifi-sec.key-mgmt wpa-psk
 sudo nmcli con modify carma-ap wifi-sec.psk "<choose-a-real-password>"
 sudo nmcli con modify carma-ap ipv4.method shared
 sudo nmcli con modify carma-ap ipv4.address 192.168.4.1/24
+```
+
+**2. Switch to it whenever you want** (e.g. to test the AP flow, or for
+real deployment):
+
+```sh
 sudo nmcli con up carma-ap
 ```
 
-- `autoconnect yes` makes this come up on every boot without a monitor/
-  keyboard attached.
-- `ipv4.method shared` gives NetworkManager's own internal DHCP to
-  connecting clients (dashboard viewers) — no separate dnsmasq needed.
-- Verify with `nmcli con show --active` and by joining the `carma` network
-  from a phone/laptop and opening `http://192.168.4.1:8000`.
-- To go back to a normal Wi-Fi client for maintenance (e.g. re-running
-  `scripts/fetch_models.py` after changing the model):
-  `sudo nmcli con down carma-ap && sudo nmcli con up <your-home-wifi-profile>`.
+Verify with `nmcli con show --active` and by joining the `carma` network
+from a phone/laptop and opening `http://192.168.4.1:8000`.
+
+**3. Switch back to your regular Wi-Fi** for maintenance (e.g. re-running
+`scripts/fetch_models.py` after changing a model, or just to get back to
+normal development):
+
+```sh
+sudo nmcli con down carma-ap && sudo nmcli con up <your-home-wifi-profile>
+```
+
+**4. Only once you're actually deploying** in the field (no known Wi-Fi
+around, no one there to fix a stuck network), make the AP come up on its
+own after a power cycle:
+
+```sh
+sudo nmcli con modify carma-ap autoconnect yes
+sudo nmcli con modify carma-ap connection.autoconnect-priority 10
+```
 
 ## Development (off-Pi)
 
