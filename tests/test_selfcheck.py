@@ -1,6 +1,6 @@
 import numpy as np
 
-from carma.selfcheck import check_camera, check_model
+from carma.selfcheck import check_camera, check_model, check_ocr, check_storage
 from tests.conftest import FakeSource
 
 
@@ -32,3 +32,29 @@ def test_model_failed_to_load(monkeypatch):
 
     monkeypatch.setattr("carma.selfcheck.PlateDetector", boom)
     assert check_model("some-model", 0.4) is None
+
+
+def test_ocr_ok(monkeypatch):
+    monkeypatch.setattr("carma.selfcheck.PlateReader", lambda name: object())
+    assert check_ocr("some-model") is not None
+
+
+def test_ocr_failed_to_load(monkeypatch):
+    def boom(name):
+        raise RuntimeError("no internet and model not cached")
+
+    monkeypatch.setattr("carma.selfcheck.PlateReader", boom)
+    assert check_ocr("some-model") is None
+
+
+def test_storage_ok(monkeypatch):
+    monkeypatch.setattr("carma.selfcheck.HitStore", lambda db_path: object())
+    assert check_storage("some/path.db") is not None
+
+
+def test_storage_failed_to_open(monkeypatch):
+    def boom(db_path):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("carma.selfcheck.HitStore", boom)
+    assert check_storage("some/path.db") is None

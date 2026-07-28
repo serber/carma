@@ -20,7 +20,9 @@ detection:
   confidence_threshold: 0.4
 
 ocr:
-  model_path: models/plate_ocr.onnx
+  # Registered fast-plate-ocr model (auto-downloaded once, see
+  # scripts/fetch_models.py), or a path to a local .onnx for a custom model.
+  model_name: cct-xs-v2-global-model
 
 dedup:
   window_seconds: 30

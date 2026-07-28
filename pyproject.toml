@@ -12,7 +12,7 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "onnxruntime>=1.19.2",
     "open-image-models[onnx]>=0.6.0",
-    "fast-plate-ocr>=0.2",
+    "fast-plate-ocr>=1.0",
 ]
 
 [project.optional-dependencies]

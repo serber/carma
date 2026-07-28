@@ -9,6 +9,8 @@ import time
 
 from carma.capture.base import FrameSource
 from carma.pipeline.detect import PlateDetector
+from carma.pipeline.ocr import PlateReader
+from carma.storage.db import HitStore
 
 logger = logging.getLogger(__name__)
 
@@ -57,3 +59,28 @@ def check_model(model_name: str, confidence_threshold: float) -> PlateDetector |
 
     logger.info("model OK name=%s", model_name)
     return detector
+
+
+def check_ocr(model_name: str) -> PlateReader | None:
+    """Loads the OCR model. Same offline-caching and non-fatal-failure
+    pattern as check_model() -- see scripts/fetch_models.py."""
+    try:
+        reader = PlateReader(model_name)
+    except Exception:
+        logger.exception("ocr FAILED to load")
+        return None
+
+    logger.info("ocr OK name=%s", model_name)
+    return reader
+
+
+def check_storage(db_path: str) -> HitStore | None:
+    """Opens (creating if needed) the SQLite hit store."""
+    try:
+        store = HitStore(db_path)
+    except Exception:
+        logger.exception("storage FAILED to open")
+        return None
+
+    logger.info("storage OK path=%s", db_path)
+    return store

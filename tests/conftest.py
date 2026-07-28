@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from carma.capture.base import FrameSource
+from carma.storage.db import Hit
 
 
 class FakeSource(FrameSource):
@@ -47,3 +48,43 @@ class FakePlateDetector:
 
     def detect(self, frame: np.ndarray) -> list[tuple[int, int, int, int, float]]:
         return list(self._boxes)
+
+
+class FakePlateReader:
+    """Duck-typed stand-in for PlateReader: only needs .read(crop)."""
+
+    def __init__(self, result: tuple[str, float, str] | None = ("123ABC02", 0.9, "KZ")) -> None:
+        self._result = result
+        self.calls = 0
+
+    def read(self, crop: np.ndarray) -> tuple[str, float, str] | None:
+        self.calls += 1
+        return self._result
+
+
+class FakeHitStore:
+    """Duck-typed stand-in for HitStore: records insert() calls in memory."""
+
+    def __init__(self) -> None:
+        self.inserted: list[tuple] = []
+
+    def insert(
+        self,
+        timestamp: str,
+        plate: str,
+        confidence: float,
+        format_: str,
+        frame_filename: str,
+        crop_filename: str,
+    ) -> int:
+        self.inserted.append(
+            (timestamp, plate, confidence, format_, frame_filename, crop_filename)
+        )
+        return len(self.inserted)
+
+    def recent(self, limit: int = 50) -> list[Hit]:
+        rows = list(reversed(self.inserted))[:limit]
+        return [
+            Hit(id=i, timestamp=t, plate=p, confidence=c, format=f, frame_filename=ff, crop_filename=cf)
+            for i, (t, p, c, f, ff, cf) in enumerate(rows)
+        ]

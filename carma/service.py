@@ -1,7 +1,7 @@
-# Main loop: wires capture -> motion -> detect -> ocr -> dedup -> storage,
-# and starts the dashboard. Entry point used by carma/__main__.py.
+# Main loop: wires capture -> motion -> detect -> ocr -> storage, and
+# starts the dashboard. Entry point used by carma/__main__.py.
 #
-# TODO(stage 3-4): wire in ocr, dedup, storage per build order.
+# TODO(stage 4): dedup, watchlist highlight, polish.
 import logging
 import sys
 
@@ -13,7 +13,7 @@ from carma.config import ConfigError, load_config
 from carma.counters import Counters
 from carma.logging_setup import configure_logging
 from carma.pipeline.motion import MotionDetector
-from carma.selfcheck import check_camera, check_model
+from carma.selfcheck import check_camera, check_model, check_ocr, check_storage
 from carma.web.app import create_app
 
 logger = logging.getLogger(__name__)
@@ -37,13 +37,23 @@ def run(config_path: str) -> int:
     plate_detector = check_model(
         config.detection.model_name, config.detection.confidence_threshold
     )
+    plate_reader = check_ocr(config.ocr.model_name)
+    hit_store = check_storage(config.storage.db_path)
 
     motion_detector = MotionDetector(
         config.motion.threshold, config.motion.min_area, config.motion.roi
     )
 
     counters = Counters()
-    capture_loop = CaptureLoop(source, counters, motion_detector, plate_detector)
+    capture_loop = CaptureLoop(
+        source,
+        counters,
+        motion_detector,
+        plate_detector,
+        plate_reader,
+        hit_store,
+        config.storage.images_dir,
+    )
     if camera_ok:
         capture_loop.start()
     else:
@@ -56,8 +66,10 @@ def run(config_path: str) -> int:
         "config": True,
         "camera": camera_ok,
         "model": plate_detector is not None,
+        "ocr": plate_reader is not None,
+        "storage": hit_store is not None,
     }
-    app = create_app(capture_loop, counters, self_check)
+    app = create_app(capture_loop, counters, self_check, hit_store, config.storage.images_dir)
 
     logger.info(
         "dashboard starting host=%s port=%s",
@@ -72,5 +84,7 @@ def run(config_path: str) -> int:
         )
     finally:
         capture_loop.stop()
+        if hit_store is not None:
+            hit_store.close()
 
     return 0

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from fast_plate_ocr.inference.hub import AVAILABLE_ONNX_MODELS as OCR_MODELS
 from open_image_models.detection.core.hub import DETECTION_MODELS
 
 VALID_CAMERA_BACKENDS = {"picamera2", "opencv"}
@@ -47,7 +48,11 @@ class DetectionConfig:
 
 @dataclasses.dataclass
 class OCRConfig:
-    model_path: str = "models/plate_ocr.onnx"
+    # A registered fast-plate-ocr model name (auto-downloaded and cached,
+    # see scripts/fetch_models.py), or a path to a local ONNX file. Default
+    # matches what fast-alpr pairs with our detector by default. Its
+    # alphabet is plain 0-9A-Z -- no Cyrillic needed, see pipeline/ocr.py.
+    model_name: str = "cct-xs-v2-global-model"
 
 
 @dataclasses.dataclass
@@ -168,6 +173,13 @@ def load_config(path: str | Path) -> Config:
             f"{path}: detection.model_name must be one of "
             f"{sorted(DETECTION_MODELS)}, or an existing local .onnx path, "
             f"got {detection.model_name!r}"
+        )
+
+    if ocr.model_name not in OCR_MODELS and not Path(ocr.model_name).is_file():
+        raise ConfigError(
+            f"{path}: ocr.model_name must be one of "
+            f"{sorted(OCR_MODELS)}, or an existing local .onnx path, "
+            f"got {ocr.model_name!r}"
         )
 
     if dedup.window_seconds < 0:

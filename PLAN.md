@@ -86,17 +86,45 @@ since there's no live capture loop without a camera. 46 tests passing.
 
 ## Stage 3 — OCR + storage
 
-- [ ] 17. Integrate fast-plate-ocr.
-- [ ] 18. RU Cyrillic homoglyph -> latin mapping (map already stubbed in
-      `pipeline/ocr.py`).
-- [ ] 19. KZ / RU format validation (sanity-check) + format tag
-      (KZ / RU / unknown).
-- [ ] 20. `storage/db.py`: SQLite schema (timestamp, plate, confidence,
-      format) + writer.
-- [ ] 21. `storage/images.py`: save full frame + cropped-plate image per
-      hit.
-- [ ] 22. Dashboard: browsable recent-hits list with images.
-- [ ] 23. Dashboard: "OCR reads" counter.
+- [x] 17. Integrated **fast-plate-ocr** (`LicensePlateRecognizer`), default
+      model `cct-xs-v2-global-model` — matches what `fast-alpr` pairs with
+      our detector by default. Its alphabet is plain `0-9A-Z` (no Cyrillic
+      classes at all); the model's own "region" head is a ~65-country
+      classifier that doesn't include KZ/RU, confirmed by inspecting its
+      plate config, so it's unused here in favor of our own regex tagging.
+- [x] 18. RU Cyrillic homoglyph -> latin mapping: kept in
+      `pipeline/ocr.py` as `normalize_plate()`, but it turns out to not be
+      needed on OCR *output* -- since the model's alphabet has no
+      Cyrillic classes, glyphs that are visual homoglyphs (А/A, В/B, ...)
+      already decode as their latin twin at inference time. The map is
+      used instead to normalize plate strings from elsewhere (e.g. a
+      watchlist entry typed with Cyrillic letters) for comparison.
+- [x] 19. `classify_plate()`: regex sanity-check tagging KZ
+      (`\d{3}[A-Z]{3}\d{2}`) / RU (`[A-Z]\d{3}[A-Z]{2}\d{2,3}`) / unknown.
+- [x] 20. `storage/db.py`: `HitStore` — SQLite schema (timestamp, plate,
+      confidence, format, frame/crop filenames), lock-guarded single
+      connection (one writer thread, dashboard readers).
+- [x] 21. `storage/images.py`: `save_hit_images()` — timestamp + uuid
+      filenames, returns filenames only (not full paths); dashboard serves
+      `storage.images_dir` directly via `StaticFiles`.
+- [x] 22. Dashboard: `/hits` page — table of recent hits with clickable
+      crop thumbnails (full frame behind the link), linked from `/`.
+- [x] 23. Dashboard: "OCR reads" counter — wired via `CaptureLoop`.
+
+`carma/selfcheck.py` gained `check_ocr()` / `check_storage()` (same
+non-fatal pattern as camera/model). `scripts/fetch_models.py` now
+pre-downloads both the detector and OCR models. Every OCR read is stored
+regardless of confidence or format tag (including "unknown") -- no
+dedup/filtering yet, that's stage 4 by design; the operator can judge
+low-confidence/unknown reads visually via the crop thumbnail.
+
+Verified with real inference (not just mocks): downloaded the OCR model,
+ran it against fast-plate-ocr's own sample plate crops (`AD799KB`,
+`KRW301`, both confidence 1.0, correctly tagged "unknown" since they're
+not KZ/RU shaped). End-to-end smoke test (camera intentionally
+unavailable): self-check logs `model/ocr/storage OK`, manually inserted a
+hit and confirmed `/hits` renders it with a working `/images/...` link.
+76 tests passing.
 
 ## Stage 4 — Dedup, watchlist, polish
 

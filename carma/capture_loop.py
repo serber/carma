@@ -1,11 +1,12 @@
 # Background thread that continuously pulls frames from a FrameSource, runs
-# them through motion -> detection, and keeps the latest frame
-# JPEG-encoded (with any detection boxes drawn) ready for the dashboard's
-# MJPEG stream.
+# them through motion -> detection -> ocr -> storage, and keeps the latest
+# frame JPEG-encoded (with any detection boxes drawn) ready for the
+# dashboard's MJPEG stream.
 from __future__ import annotations
 
 import logging
 import threading
+from datetime import UTC, datetime
 
 import cv2
 import numpy as np
@@ -14,6 +15,9 @@ from carma.capture.base import FrameSource
 from carma.counters import Counters
 from carma.pipeline.detect import Box, PlateDetector
 from carma.pipeline.motion import MotionDetector
+from carma.pipeline.ocr import PlateReader
+from carma.storage.db import HitStore
+from carma.storage.images import save_hit_images
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +32,17 @@ class CaptureLoop:
         counters: Counters,
         motion_detector: MotionDetector,
         plate_detector: PlateDetector | None,
+        plate_reader: PlateReader | None,
+        hit_store: HitStore | None,
+        images_dir: str,
     ) -> None:
         self._source = source
         self._counters = counters
         self._motion_detector = motion_detector
         self._plate_detector = plate_detector
+        self._plate_reader = plate_reader
+        self._hit_store = hit_store
+        self._images_dir = images_dir
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._frame_lock = threading.Lock()
@@ -78,7 +88,30 @@ class CaptureLoop:
         boxes = self._plate_detector.detect(frame)
         if boxes:
             self._counters.increment("detections", by=len(boxes))
+
+        for box in boxes:
+            self._read_and_store(frame, box)
+
         return boxes
+
+    def _read_and_store(self, frame: np.ndarray, box: Box) -> None:
+        if self._plate_reader is None:
+            return
+
+        crop = _crop(frame, box, frame.shape[1], frame.shape[0])
+        result = self._plate_reader.read(crop)
+        if result is None:
+            return
+        plate, confidence, plate_format = result
+        self._counters.increment("ocr_reads")
+
+        if self._hit_store is None:
+            return
+        frame_filename, crop_filename = save_hit_images(frame, crop, self._images_dir)
+        timestamp = datetime.now(UTC).isoformat()
+        self._hit_store.insert(
+            timestamp, plate, confidence, plate_format, frame_filename, crop_filename
+        )
 
     def _encode(self, frame: np.ndarray, boxes: list[Box]) -> None:
         if boxes:
@@ -92,3 +125,12 @@ class CaptureLoop:
             return
         with self._frame_lock:
             self._latest_jpeg = buf.tobytes()
+
+
+def _crop(frame: np.ndarray, box: Box, frame_width: int, frame_height: int) -> np.ndarray:
+    x1, y1, x2, y2, _confidence = box
+    x1 = max(0, min(x1, frame_width))
+    y1 = max(0, min(y1, frame_height))
+    x2 = max(0, min(x2, frame_width))
+    y2 = max(0, min(y2, frame_height))
+    return frame[y1:y2, x1:x2]

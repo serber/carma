@@ -15,14 +15,17 @@ _Filled in as each piece lands — see build order in SPEC.md._
       [Wi-Fi access point](#wi-fi-access-point) below
 - [x] Install carma (`sudo scripts/install.sh`) — creates the `carma` user,
       a venv at `/opt/carma/.venv` (with `--system-site-packages` for
-      picamera2), seeds `config.yaml`, pre-downloads the plate-detector
-      model (needs internet once — see `scripts/fetch_models.py`), installs
-      + enables the systemd unit
+      picamera2), seeds `config.yaml`, pre-downloads the plate-detector and
+      OCR models (needs internet once — see `scripts/fetch_models.py`),
+      installs + enables the systemd unit
 - [ ] Power on, join the Pi's Wi-Fi, open `http://192.168.4.1:8000`
 - [x] Confirm the live MJPEG preview and aim the camera — dashboard serves
       `/stream.mjpg` with detection boxes drawn on it; if the camera fails
       to open you'll see a red "camera unavailable" placeholder instead of
       a crash, and `frames_captured` stays at 0 on `/api/status`
+- [x] Browse plate reads at `/hits` — timestamp, plate string, KZ/RU/unknown
+      format tag, confidence, and the cropped plate image (click through to
+      the full frame)
 - [x] `journalctl -u carma -f` to watch structured logs — every module logs
       via its own name (`carma.capture.picamera2_source`, `carma.web.app`,
       ...) so the log line tells you which stage is talking
