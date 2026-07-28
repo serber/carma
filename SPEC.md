@@ -85,8 +85,12 @@ tell why." Design against that from day one:
 
 ## Access model (local only, no internet)
 
-- Pi runs as a **Wi-Fi access point** (`hostapd` + `dnsmasq`), broadcasting its
-  own network; reachable at a fixed IP (e.g. `192.168.4.1`).
+- Pi runs as a **Wi-Fi access point**, broadcasting its own network;
+  reachable at a fixed IP (e.g. `192.168.4.1`). Implemented via
+  **NetworkManager** (`nmcli`, built into Raspberry Pi OS Trixie) rather
+  than separate `hostapd`/`dnsmasq` services — same outcome (fixed-IP AP,
+  local DHCP), fewer moving parts on an unattended device. See README's
+  "Wi-Fi access point" section.
 - **SSH** for logs / shell.
 - **Local web dashboard** (FastAPI + uvicorn) at `http://192.168.4.1:8000`:
   - live **MJPEG preview** from the camera (doubles as the aiming tool at mount
@@ -95,9 +99,9 @@ tell why." Design against that from day one:
   - browsable list of recent hits with cropped plate images,
   - tail of the log on the page.
 
-`hostapd`/`dnsmasq` setup is OS-level — put it in the README bring-up
-checklist rather than code, but the dashboard + AP must be the first thing that
-works so the device is inspectable immediately.
+AP setup is OS-level — put it in the README bring-up checklist rather than
+code, but the dashboard + AP must be the first thing that works so the
+device is inspectable immediately.
 
 ## Config
 
