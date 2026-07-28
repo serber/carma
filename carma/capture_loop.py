@@ -92,12 +92,12 @@ class CaptureLoop:
                 continue
             self._counters.increment("frames_captured")
             try:
-                boxes = self._process(frame)
-                self._encode(frame, boxes)
+                detections = self._process(frame)
+                self._encode(frame, detections)
             except Exception:
                 logger.exception("error processing frame; continuing")
 
-    def _process(self, frame: np.ndarray) -> list[Box]:
+    def _process(self, frame: np.ndarray) -> list[tuple[Box, str | None]]:
         if not self._motion_detector.update(frame):
             return []
         self._counters.increment("motion_events")
@@ -108,40 +108,38 @@ class CaptureLoop:
         if boxes:
             self._counters.increment("detections", by=len(boxes))
 
-        for box in boxes:
-            self._read_and_store(frame, box)
+        return [(box, self._read_and_store(frame, box)) for box in boxes]
 
-        return boxes
-
-    def _read_and_store(self, frame: np.ndarray, box: Box) -> None:
+    def _read_and_store(self, frame: np.ndarray, box: Box) -> str | None:
         if self._plate_reader is None:
-            return
+            return None
 
         crop = _crop(frame, box, frame.shape[1], frame.shape[0])
         result = self._plate_reader.read(crop)
         if result is None:
-            return
+            return None
         plate, confidence, plate_format = result
         self._counters.increment("ocr_reads")
 
-        if not self._deduper.should_record(plate):
-            return
-        if self._hit_store is None:
-            return
+        # Dedup only gates storage -- the live overlay should still show
+        # every read, even a repeat of a plate that's sitting in frame.
+        if self._hit_store is not None and self._deduper.should_record(plate):
+            watchlist_match = self._watchlist.matches(plate)
+            frame_filename, crop_filename = save_hit_images(frame, crop, self._images_dir)
+            timestamp = datetime.now(UTC).isoformat()
+            self._hit_store.insert(
+                timestamp, plate, confidence, plate_format, watchlist_match,
+                frame_filename, crop_filename,
+            )
+        return plate
 
-        watchlist_match = self._watchlist.matches(plate)
-        frame_filename, crop_filename = save_hit_images(frame, crop, self._images_dir)
-        timestamp = datetime.now(UTC).isoformat()
-        self._hit_store.insert(
-            timestamp, plate, confidence, plate_format, watchlist_match,
-            frame_filename, crop_filename,
-        )
-
-    def _encode(self, frame: np.ndarray, boxes: list[Box]) -> None:
-        if boxes:
+    def _encode(self, frame: np.ndarray, detections: list[tuple[Box, str | None]]) -> None:
+        if detections:
             frame = frame.copy()
-            for x1, y1, x2, y2, _confidence in boxes:
+            for (x1, y1, x2, y2, _confidence), plate in detections:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 2)
+                if plate:
+                    _draw_label(frame, x1, y1, plate)
 
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         if not ok:
@@ -149,6 +147,23 @@ class CaptureLoop:
             return
         with self._frame_lock:
             self._latest_jpeg = buf.tobytes()
+
+
+def _draw_label(frame: np.ndarray, x: int, y: int, text: str) -> None:
+    """Draws a filled label (plate text on a green background, same as the
+    box) anchored above (x, y) -- the detection box's top-left corner --
+    or below it if there's no room above."""
+    font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
+    pad = 4
+    label_h = text_h + baseline + 2 * pad
+    label_y1 = y - label_h if y - label_h >= 0 else y
+    label_y2 = label_y1 + label_h
+    cv2.rectangle(frame, (x, label_y1), (x + text_w + 2 * pad, label_y2), BOX_COLOR, cv2.FILLED)
+    cv2.putText(
+        frame, text, (x + pad, label_y2 - pad - baseline), font, scale, (0, 0, 0),
+        thickness, cv2.LINE_AA,
+    )
 
 
 def _crop(frame: np.ndarray, box: Box, frame_width: int, frame_height: int) -> np.ndarray:

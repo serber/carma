@@ -1,5 +1,6 @@
 import time
 
+import cv2
 import numpy as np
 
 from carma.capture_loop import CaptureLoop
@@ -220,6 +221,60 @@ def test_watchlist_match_flagged_on_insert(tmp_path):
     loop.stop()
 
     assert hit_store.inserted[0][4] is True  # watchlist_match
+
+
+def _decode(jpeg: bytes) -> np.ndarray:
+    return cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
+def test_encode_draws_plate_label_when_recognized():
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    loop = _make_loop(FakeSource(), Counters(), _quiet_motion())
+    box = (20, 30, 80, 60, 0.9)
+
+    loop._encode(frame, [(box, "123ABC02")])
+
+    decoded = _decode(loop.latest_jpeg())
+    # the label sits just above the box's top-left corner, filled in the
+    # box color (green) -- sample a pixel inside it
+    sample = decoded[15, 25]
+    assert int(sample[1]) > int(sample[2]) + 50  # green channel dominates
+
+
+def test_encode_skips_label_when_plate_not_recognized():
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    loop = _make_loop(FakeSource(), Counters(), _quiet_motion())
+    box = (20, 30, 80, 60, 0.9)
+
+    loop._encode(frame, [(box, None)])
+
+    decoded = _decode(loop.latest_jpeg())
+    sample = decoded[15, 25]
+    assert int(sample[1]) < 50  # no label drawn, background stays black
+
+
+def test_overlay_shows_plate_even_when_dedup_suppresses_storage(tmp_path):
+    # the live overlay is about "is it reading right now", independent of
+    # whether this particular read gets written to storage
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.87, "KZ"))
+    hit_store = FakeHitStore()
+    images_dir = tmp_path / "images"
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        hit_store, str(images_dir), deduper=Deduper(window_seconds=9999),
+    )
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["ocr_reads"] > 3)
+    loop.stop()
+    detections = loop._process(frame)
+
+    assert len(hit_store.inserted) == 1  # storage deduped
+    assert detections == [((1, 1, 4, 4, 0.9), "123ABC02")]  # overlay unaffected
 
 
 def test_bad_frame_does_not_kill_the_loop():
