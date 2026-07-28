@@ -39,8 +39,10 @@ storage:
   db_path: data/carma.db
   images_dir: data/images
   # OCR reads below this confidence aren't written to storage (still shown
-  # live on the preview). 0 stores everything. Adjustable live from the
-  # dashboard without a restart -- this is just the value at startup.
+  # live on the preview). 0 stores everything. This is just the starting
+  # value -- adjustable live from the dashboard without a restart, and
+  # once changed there it's persisted to data/runtime_settings.json,
+  # which then wins over this value on every future startup.
   min_confidence: 0.0
 
 log_level: INFO

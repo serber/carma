@@ -220,6 +220,7 @@ __marimo__/
 # carma runtime data — not source
 data/*.db
 data/images/
+data/runtime_settings.json
 models/*.onnx
 config.yaml
 

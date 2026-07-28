@@ -297,7 +297,7 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       <p class="hint">
         Reads below this confidence still show live on the preview and count
         toward OCR reads -- they just aren't written to <a href="/hits">Hits</a>.
-        0 stores everything.
+        0 stores everything. Saved value survives a restart.
       </p>
     </div>
     <div class="card">

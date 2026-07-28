@@ -2,6 +2,7 @@
 # and starts the dashboard. Entry point used by carma/__main__.py.
 import logging
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -46,7 +47,8 @@ def run(config_path: str) -> int:
     )
     deduper = Deduper(config.dedup.window_seconds)
     watchlist = Watchlist(config.watchlist.enabled, config.watchlist.plates)
-    settings = RuntimeSettings(config.storage.min_confidence)
+    settings_path = Path(config.storage.db_path).parent / "runtime_settings.json"
+    settings = RuntimeSettings(config.storage.min_confidence, persist_path=str(settings_path))
 
     counters = Counters()
     capture_loop = CaptureLoop(
