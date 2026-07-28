@@ -1,0 +1,388 @@
+import time
+
+import cv2
+import numpy as np
+
+from carma.capture_loop import CaptureLoop
+from carma.counters import Counters
+from carma.pipeline.dedup import Deduper
+from carma.pipeline.motion import MotionDetector
+from carma.pipeline.watchlist import Watchlist
+from carma.settings import RuntimeSettings
+from tests.conftest import FakeHitStore, FakePlateDetector, FakePlateReader, FakeSource
+
+
+def _quiet_motion() -> MotionDetector:
+    return MotionDetector(threshold=25, min_area=500)
+
+
+def _always_motion() -> MotionDetector:
+    # threshold=0, min_area=0: any frame after the first baseline reports
+    # motion, regardless of actual content -- deterministic for tests.
+    return MotionDetector(threshold=0, min_area=0)
+
+
+def _no_dedup() -> Deduper:
+    return Deduper(window_seconds=0)
+
+
+def _no_watchlist() -> Watchlist:
+    return Watchlist(enabled=False, plates=[])
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def _make_loop(
+    source, counters, motion_detector, plate_detector=None, plate_reader=None,
+    hit_store=None, images_dir="unused", deduper=None, watchlist=None, settings=None,
+) -> CaptureLoop:
+    return CaptureLoop(
+        source, counters, motion_detector, plate_detector, plate_reader, hit_store,
+        images_dir, deduper or _no_dedup(), watchlist or _no_watchlist(),
+        settings or RuntimeSettings(min_confidence=0.0),
+    )
+
+
+def test_captures_frames_and_encodes_jpeg():
+    source = FakeSource(frames=[np.zeros((8, 8, 3), dtype=np.uint8)])
+    counters = Counters()
+    loop = _make_loop(source, counters, _quiet_motion())
+
+    loop.start()
+    _wait_until(lambda: loop.latest_jpeg() is not None)
+    loop.stop()
+
+    assert loop.latest_jpeg() is not None
+    assert counters.snapshot()["frames_captured"] > 0
+    assert source.stopped is True
+
+
+def test_none_frames_do_not_increment_counter():
+    source = FakeSource(frames=[None])
+    counters = Counters()
+    loop = _make_loop(source, counters, _quiet_motion())
+
+    loop.start()
+    time.sleep(0.1)
+    loop.stop()
+
+    assert counters.snapshot()["frames_captured"] == 0
+    assert loop.latest_jpeg() is None
+
+
+def test_motion_and_detection_counters_increment():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    loop = _make_loop(source, counters, _always_motion(), plate_detector)
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["detections"] > 0)
+    loop.stop()
+
+    snap = counters.snapshot()
+    assert snap["motion_events"] > 0
+    assert snap["detections"] > 0
+
+
+def test_no_plate_detector_means_no_detections():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    loop = _make_loop(source, counters, _always_motion())
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["motion_events"] > 0)
+    loop.stop()
+
+    snap = counters.snapshot()
+    assert snap["motion_events"] > 0
+    assert snap["detections"] == 0
+
+
+def test_quiet_motion_detector_keeps_detections_at_zero():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    loop = _make_loop(source, counters, _quiet_motion(), plate_detector)
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["frames_captured"] > 3)
+    loop.stop()
+
+    snap = counters.snapshot()
+    assert snap["motion_events"] == 0
+    assert snap["detections"] == 0
+
+
+def test_ocr_and_storage_wired_on_detection(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.87, "KZ"))
+    hit_store = FakeHitStore()
+    images_dir = tmp_path / "images"
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        hit_store, str(images_dir),
+    )
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["ocr_reads"] > 0)
+    loop.stop()
+
+    assert counters.snapshot()["ocr_reads"] > 0
+    assert plate_reader.calls > 0
+    assert len(hit_store.inserted) > 0
+    saved = hit_store.inserted[0]
+    assert saved[1] == "123ABC02"
+    assert saved[3] == "KZ"
+    assert saved[4] is False  # watchlist_match
+    assert list(images_dir.glob("*_frame.jpg"))
+    assert list(images_dir.glob("*_crop.jpg"))
+
+
+def test_no_ocr_reads_without_plate_reader():
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    loop = _make_loop(source, counters, _always_motion(), plate_detector)
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["detections"] > 0)
+    loop.stop()
+
+    assert counters.snapshot()["ocr_reads"] == 0
+
+
+def test_no_storage_writes_without_hit_store(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.87, "KZ"))
+    images_dir = tmp_path / "images"
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        None, str(images_dir),
+    )
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["ocr_reads"] > 0)
+    loop.stop()
+
+    assert counters.snapshot()["ocr_reads"] > 0
+    assert not images_dir.exists() or not list(images_dir.glob("*"))
+
+
+def test_dedup_suppresses_repeated_plate(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.87, "KZ"))
+    hit_store = FakeHitStore()
+    images_dir = tmp_path / "images"
+    # window_seconds huge: the same plate seen repeatedly is only stored once
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        hit_store, str(images_dir), deduper=Deduper(window_seconds=9999),
+    )
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["ocr_reads"] > 3)
+    loop.stop()
+
+    assert counters.snapshot()["ocr_reads"] > 3  # OCR still ran every time
+    assert len(hit_store.inserted) == 1  # but only stored once
+
+
+def test_watchlist_match_flagged_on_insert(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.87, "KZ"))
+    hit_store = FakeHitStore()
+    images_dir = tmp_path / "images"
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        hit_store, str(images_dir), watchlist=Watchlist(enabled=True, plates=["ABC02"]),
+    )
+
+    loop.start()
+    _wait_until(lambda: len(hit_store.inserted) > 0)
+    loop.stop()
+
+    assert hit_store.inserted[0][4] is True  # watchlist_match
+
+
+def _decode(jpeg: bytes) -> np.ndarray:
+    return cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
+def test_encode_draws_plate_label_when_recognized():
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    loop = _make_loop(FakeSource(), Counters(), _quiet_motion())
+    box = (20, 30, 80, 60, 0.9)
+
+    loop._encode(frame, [(box, "123ABC02")])
+
+    decoded = _decode(loop.latest_jpeg())
+    # the label sits just above the box's top-left corner, filled in the
+    # box color (green) -- sample a pixel inside it
+    sample = decoded[15, 25]
+    assert int(sample[1]) > int(sample[2]) + 50  # green channel dominates
+
+
+def test_encode_skips_label_when_plate_not_recognized():
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    loop = _make_loop(FakeSource(), Counters(), _quiet_motion())
+    box = (20, 30, 80, 60, 0.9)
+
+    loop._encode(frame, [(box, None)])
+
+    decoded = _decode(loop.latest_jpeg())
+    sample = decoded[15, 25]
+    assert int(sample[1]) < 50  # no label drawn, background stays black
+
+
+def test_overlay_shows_plate_even_when_dedup_suppresses_storage(tmp_path):
+    # the live overlay is about "is it reading right now", independent of
+    # whether this particular read gets written to storage
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.87, "KZ"))
+    hit_store = FakeHitStore()
+    images_dir = tmp_path / "images"
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        hit_store, str(images_dir), deduper=Deduper(window_seconds=9999),
+    )
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["ocr_reads"] > 3)
+    loop.stop()
+    detections = loop._process(frame)
+
+    assert len(hit_store.inserted) == 1  # storage deduped
+    assert detections == [((1, 1, 4, 4, 0.9), "123ABC02")]  # overlay unaffected
+
+
+def test_bad_frame_does_not_kill_the_loop():
+    class BoomOnceMotion(MotionDetector):
+        def __init__(self):
+            super().__init__(threshold=0, min_area=0)
+            self.calls = 0
+
+        def update(self, frame):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("simulated processing error")
+            return super().update(frame)
+
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    motion = BoomOnceMotion()
+    loop = _make_loop(source, counters, motion)
+
+    loop.start()
+    _wait_until(lambda: motion.calls > 2)
+    loop.stop()
+
+    # the loop kept running (frames_captured kept incrementing) despite the
+    # first call raising
+    assert counters.snapshot()["frames_captured"] > 2
+
+
+def test_below_min_confidence_read_is_not_stored(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.3, "KZ"))
+    hit_store = FakeHitStore()
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader, hit_store,
+        str(tmp_path / "images"), settings=RuntimeSettings(min_confidence=0.5),
+    )
+
+    loop.start()
+    _wait_until(lambda: counters.snapshot()["ocr_reads"] > 0)
+    loop.stop()
+
+    assert counters.snapshot()["ocr_reads"] > 0  # OCR still ran
+    assert len(hit_store.inserted) == 0  # but below threshold, not stored
+
+
+def test_at_or_above_min_confidence_read_is_stored(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.5, "KZ"))
+    hit_store = FakeHitStore()
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader, hit_store,
+        str(tmp_path / "images"), settings=RuntimeSettings(min_confidence=0.5),
+    )
+
+    loop.start()
+    _wait_until(lambda: len(hit_store.inserted) > 0)
+    loop.stop()
+
+    assert len(hit_store.inserted) > 0
+
+
+def test_overlay_shows_plate_even_below_min_confidence(tmp_path):
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    plate_reader = FakePlateReader(result=("123ABC02", 0.1, "KZ"))
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector, plate_reader,
+        FakeHitStore(), str(tmp_path / "images"), settings=RuntimeSettings(min_confidence=0.9),
+    )
+
+    loop._process(frame)  # first call just seeds the motion baseline
+    detections = loop._process(frame)
+
+    assert detections == [((1, 1, 4, 4, 0.9), "123ABC02")]
+
+
+def test_low_confidence_read_does_not_block_dedup_for_later_good_read(tmp_path):
+    # a below-threshold read must not consume the dedup slot, or a good
+    # read of the same plate moments later would get wrongly suppressed
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    hit_store = FakeHitStore()
+    loop = _make_loop(
+        source, counters, _always_motion(), plate_detector,
+        FakePlateReader(result=("123ABC02", 0.2, "KZ")), hit_store,
+        str(tmp_path / "images"), deduper=Deduper(window_seconds=9999),
+        settings=RuntimeSettings(min_confidence=0.5),
+    )
+
+    loop._process(frame)  # first call just seeds the motion baseline
+
+    loop._process(frame)  # below threshold: not stored, dedup untouched
+    assert len(hit_store.inserted) == 0
+
+    loop._plate_reader = FakePlateReader(result=("123ABC02", 0.9, "KZ"))
+    loop._process(frame)  # now above threshold: should still be stored
+
+    assert len(hit_store.inserted) == 1

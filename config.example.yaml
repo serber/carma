@@ -1,0 +1,48 @@
+# Copy to config.yaml and adjust. Paths are relative to the working
+# directory carma is started from (see systemd/carma.service).
+
+camera:
+  backend: picamera2   # picamera2 (CSI, default) | opencv (USB)
+  device: 0             # opencv backend only: V4L2 index or /dev/videoN
+  resolution: [1280, 720]
+  framerate: 30
+
+motion:
+  threshold: 25          # frame-diff sensitivity; lower = more sensitive
+  min_area: 500           # ignore diffs smaller than this (pixels)
+  roi: null                # [x, y, w, h] in pixels, null = full frame
+
+detection:
+  # Registered open-image-models plate detector (auto-downloaded once, see
+  # scripts/fetch_models.py), or a path to a local .onnx for a custom model.
+  # Same detector fast-alpr pairs with fast-plate-ocr by default.
+  model_name: yolo-v9-t-384-license-plate-end2end
+  confidence_threshold: 0.4
+
+ocr:
+  # Registered fast-plate-ocr model (auto-downloaded once, see
+  # scripts/fetch_models.py), or a path to a local .onnx for a custom model.
+  model_name: cct-xs-v2-global-model
+
+dedup:
+  window_seconds: 30
+
+watchlist:
+  enabled: false
+  plates: []              # full or partial plate strings to flag/highlight
+
+dashboard:
+  host: 0.0.0.0
+  port: 8000
+
+storage:
+  db_path: data/carma.db
+  images_dir: data/images
+  # OCR reads below this confidence aren't written to storage (still shown
+  # live on the preview). 0 stores everything. This is just the starting
+  # value -- adjustable live from the dashboard without a restart, and
+  # once changed there it's persisted to data/runtime_settings.json,
+  # which then wins over this value on every future startup.
+  min_confidence: 0.0
+
+log_level: INFO

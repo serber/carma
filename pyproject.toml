@@ -1,0 +1,34 @@
+[project]
+name = "carma"
+version = "0.1.0"
+description = "Raspberry Pi ANPR box: spots and reads passing plates, live Wi-Fi dashboard."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "onnxruntime>=1.19.2",
+    "open-image-models[onnx]>=0.6.0",
+    "fast-plate-ocr>=1.0",
+]
+
+[project.optional-dependencies]
+# picamera2 ships as a system package on Raspberry Pi OS
+# (apt install -y python3-picamera2 --no-install-recommends); listed here
+# only so `pip install .[csi]` works on-device with the venv given
+# --system-site-packages access to it.
+csi = ["picamera2"]
+dev = ["pytest", "ruff", "httpx"]
+
+[project.scripts]
+carma = "carma.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["carma*"]
