@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from open_image_models.detection.core.hub import DETECTION_MODELS
 
 VALID_CAMERA_BACKENDS = {"picamera2", "opencv"}
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -37,8 +38,11 @@ class MotionConfig:
 
 @dataclasses.dataclass
 class DetectionConfig:
-    model_path: str = "models/plate_detector.onnx"
-    confidence_threshold: float = 0.5
+    # A registered open-image-models plate detector name (auto-downloaded
+    # and cached, see scripts/fetch_models.py), or a path to a local ONNX
+    # file for a custom-trained model.
+    model_name: str = "yolo-v9-t-384-license-plate-end2end"
+    confidence_threshold: float = 0.4
 
 
 @dataclasses.dataclass
@@ -158,6 +162,12 @@ def load_config(path: str | Path) -> Config:
     if not (0.0 <= detection.confidence_threshold <= 1.0):
         raise ConfigError(
             f"{path}: detection.confidence_threshold must be between 0 and 1"
+        )
+    if detection.model_name not in DETECTION_MODELS and not Path(detection.model_name).is_file():
+        raise ConfigError(
+            f"{path}: detection.model_name must be one of "
+            f"{sorted(DETECTION_MODELS)}, or an existing local .onnx path, "
+            f"got {detection.model_name!r}"
         )
 
     if dedup.window_seconds < 0:

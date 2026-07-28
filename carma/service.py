@@ -1,7 +1,7 @@
 # Main loop: wires capture -> motion -> detect -> ocr -> dedup -> storage,
 # and starts the dashboard. Entry point used by carma/__main__.py.
 #
-# TODO(stage 2-4): wire in motion, detect, ocr, dedup, storage per build order.
+# TODO(stage 3-4): wire in ocr, dedup, storage per build order.
 import logging
 import sys
 
@@ -12,7 +12,8 @@ from carma.capture_loop import CaptureLoop
 from carma.config import ConfigError, load_config
 from carma.counters import Counters
 from carma.logging_setup import configure_logging
-from carma.selfcheck import check_camera
+from carma.pipeline.motion import MotionDetector
+from carma.selfcheck import check_camera, check_model
 from carma.web.app import create_app
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,16 @@ def run(config_path: str) -> int:
     source = create_source(config.camera)
     camera_ok = check_camera(source)
 
+    plate_detector = check_model(
+        config.detection.model_name, config.detection.confidence_threshold
+    )
+
+    motion_detector = MotionDetector(
+        config.motion.threshold, config.motion.min_area, config.motion.roi
+    )
+
     counters = Counters()
-    capture_loop = CaptureLoop(source, counters)
+    capture_loop = CaptureLoop(source, counters, motion_detector, plate_detector)
     if camera_ok:
         capture_loop.start()
     else:
@@ -43,7 +52,11 @@ def run(config_path: str) -> int:
             "fix the camera and restart carma"
         )
 
-    self_check = {"config": True, "camera": camera_ok}
+    self_check = {
+        "config": True,
+        "camera": camera_ok,
+        "model": plate_detector is not None,
+    }
     app = create_app(capture_loop, counters, self_check)
 
     logger.info(

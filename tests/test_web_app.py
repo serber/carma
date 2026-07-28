@@ -2,16 +2,18 @@ from fastapi.testclient import TestClient
 
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
+from carma.pipeline.motion import MotionDetector
 from carma.web.app import _mjpeg_generator, create_app
 from tests.conftest import FakeSource
 
 
-def _client(camera_ok: bool = True) -> TestClient:
+def _client(camera_ok: bool = True, model_ok: bool = True) -> TestClient:
     source = FakeSource()
     counters = Counters()
     counters.increment("frames_captured", by=5)
-    loop = CaptureLoop(source, counters)
-    app = create_app(loop, counters, {"config": True, "camera": camera_ok})
+    loop = CaptureLoop(source, counters, MotionDetector(threshold=25, min_area=500), None)
+    self_check = {"config": True, "camera": camera_ok, "model": model_ok}
+    app = create_app(loop, counters, self_check)
     return TestClient(app)
 
 
@@ -21,6 +23,7 @@ def test_index_lists_self_check():
     assert resp.status_code == 200
     assert "camera: FAILED" in resp.text
     assert "config: OK" in resp.text
+    assert "model: OK" in resp.text
 
 
 def test_status_reports_counters_and_self_check():
@@ -29,7 +32,7 @@ def test_status_reports_counters_and_self_check():
     assert resp.status_code == 200
     data = resp.json()
     assert data["frames_captured"] == 5
-    assert data["self_check"] == {"config": True, "camera": True}
+    assert data["self_check"] == {"config": True, "camera": True, "model": True}
     assert "fps" in data
 
 

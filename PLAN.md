@@ -52,11 +52,37 @@ actual Pi — first item to confirm at physical bring-up.
 
 ## Stage 2 — Motion + detection
 
-- [ ] 12. `pipeline/motion.py`: frame differencing + threshold + ROI.
-- [ ] 13. Dashboard: "motion events" counter.
-- [ ] 14. Pick and vendor a pretrained plate-detector ONNX model.
-- [ ] 15. `pipeline/detect.py`: inference via onnxruntime.
-- [ ] 16. Dashboard: "detections" counter.
+- [x] 12. `pipeline/motion.py`: `MotionDetector` — stateful frame
+      differencing (Gaussian-blurred grayscale diff) with `threshold` +
+      `min_area` + optional ROI. Tested in `tests/test_motion.py`.
+- [x] 13. Dashboard: "motion events" counter — wired via `CaptureLoop`.
+- [x] 14. Plate-detector model: **open-image-models** (`create_detector`),
+      default `yolo-v9-t-384-license-plate-end2end` — the same
+      detector/confidence pairing `fast-alpr` uses by default with
+      `fast-plate-ocr` (same author, models built to work together; see
+      SPEC.md's OCR pick). Registered models auto-download + cache; no raw
+      `.onnx` vendored into the repo.
+- [x] 15. `pipeline/detect.py`: `PlateDetector` wraps `create_detector`,
+      returns `(x1, y1, x2, y2, confidence)` boxes. `carma/selfcheck.py`
+      gained `check_model()` (mirrors `check_camera()`: logs "model OK" /
+      "model FAILED" and returns `None` on failure rather than crashing).
+      `scripts/fetch_models.py` pre-downloads the configured model at
+      install time (`HOME=$INSTALL_DIR` so the cache lands where the
+      systemd-run service will actually look for it) so normal offline
+      operation never needs network access, per SPEC's offline-first
+      requirement. Verified against a real image (car photo, no plate
+      present) end-to-end: model downloads, caches, loads, and runs
+      inference without error.
+- [x] 16. Dashboard: "detections" counter — wired via `CaptureLoop`;
+      detected boxes are also drawn on the MJPEG preview (green
+      rectangles), doubling as a live "is detection working" check while
+      aiming the camera.
+
+Verified end-to-end off-Pi (same nonexistent-camera-device pattern as
+stage 1, this time with the model also loaded): self-check logs `model OK`
++ `camera FAILED`, `/api/status` reports `self_check: {config: true,
+camera: false, model: true}`, motion/detections counters correctly stay 0
+since there's no live capture loop without a camera. 46 tests passing.
 
 ## Stage 3 — OCR + storage
 

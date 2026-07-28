@@ -13,8 +13,11 @@ motion:
   roi: null                # [x, y, w, h] in pixels, null = full frame
 
 detection:
-  model_path: models/plate_detector.onnx
-  confidence_threshold: 0.5
+  # Registered open-image-models plate detector (auto-downloaded once, see
+  # scripts/fetch_models.py), or a path to a local .onnx for a custom model.
+  # Same detector fast-alpr pairs with fast-plate-ocr by default.
+  model_name: yolo-v9-t-384-license-plate-end2end
+  confidence_threshold: 0.4
 
 ocr:
   model_path: models/plate_ocr.onnx

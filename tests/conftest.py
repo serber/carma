@@ -37,3 +37,13 @@ class FakeSource(FrameSource):
 @pytest.fixture
 def fake_source() -> FakeSource:
     return FakeSource()
+
+
+class FakePlateDetector:
+    """Duck-typed stand-in for PlateDetector: only needs .detect(frame)."""
+
+    def __init__(self, boxes: list[tuple[int, int, int, int, float]] | None = None) -> None:
+        self._boxes = boxes if boxes is not None else []
+
+    def detect(self, frame: np.ndarray) -> list[tuple[int, int, int, int, float]]:
+        return list(self._boxes)

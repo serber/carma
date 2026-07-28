@@ -37,6 +37,15 @@ if [[ ! -f "$INSTALL_DIR/config.yaml" ]]; then
     cp "$INSTALL_DIR/config.example.yaml" "$INSTALL_DIR/config.yaml"
 fi
 
+# HOME must match what the systemd unit's User=carma resolves to
+# (/opt/carma), so the model ends up cached where the service actually
+# looks for it at runtime -- otherwise it'd cache under root's home here
+# and the device would try (and fail) to download again offline on first
+# boot.
+echo "==> pre-downloading the plate detector model (needs internet once)"
+HOME="$INSTALL_DIR" "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/scripts/fetch_models.py" \
+    --config "$INSTALL_DIR/config.yaml"
+
 mkdir -p "$INSTALL_DIR/data/images" "$INSTALL_DIR/models"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
@@ -48,7 +57,8 @@ systemctl enable carma
 cat <<MSG
 ==> done.
     - review $INSTALL_DIR/config.yaml (camera backend/resolution, dashboard port)
-    - drop a plate-detector/OCR ONNX model in $INSTALL_DIR/models/ (stage 2+)
+    - the plate detector model was pre-downloaded and cached; re-run
+      scripts/fetch_models.py after changing detection.model_name
     - start it:   systemctl start carma
     - watch it:   journalctl -u carma -f
 MSG
