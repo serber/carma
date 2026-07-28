@@ -25,7 +25,7 @@ from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
 from carma.settings import RuntimeSettings
 from carma.storage.db import Hit, HitStore
-from carma.sysinfo import cpu_temperature_celsius
+from carma.sysinfo import cpu_temperature_celsius, disk_usage
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,9 @@ def create_app(
         data = counters.snapshot()
         data["fps"] = round(capture_loop.fps, 1)
         data["cpu_temp_celsius"] = cpu_temperature_celsius()
+        usage = disk_usage(images_dir)
+        data["disk_free_bytes"] = usage.free_bytes if usage else None
+        data["disk_total_bytes"] = usage.total_bytes if usage else None
         data["self_check"] = self_check
         return JSONResponse(data)
 
@@ -225,6 +228,13 @@ _STYLE = """
     .settings-row .saved { color: var(--good); font-size: 13px; opacity: 0; transition: opacity 0.2s; }
     .settings-row .saved.show { opacity: 1; }
     .hint { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
+    .disk-track {
+      height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden;
+    }
+    .disk-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.3s; }
+    .disk-fill.warning { background: var(--warning); }
+    .disk-fill.critical { background: var(--critical); }
+    .disk-label { color: var(--text-secondary); font-size: 13px; margin: 8px 0 16px; }
 """
 
 
@@ -274,7 +284,9 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       </div>
     </div>
     <div class="card">
-      <h2>Storage settings</h2>
+      <h2>Storage</h2>
+      <div class="disk-track"><div class="disk-fill" id="disk-fill"></div></div>
+      <p class="disk-label" id="disk-label">loading&hellip;</p>
       <div class="settings-row">
         <label for="min-confidence">Minimum confidence to store a hit</label>
         <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
@@ -331,6 +343,17 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
         if (line.includes(' WARNING ')) return 'warn';
         return '';
       }}
+      function diskClass(usedPct) {{
+        if (usedPct >= 95) return 'critical';
+        if (usedPct >= 80) return 'warning';
+        return '';
+      }}
+      function formatBytes(bytes) {{
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let v = bytes, i = 0;
+        while (v >= 1024 && i < units.length - 1) {{ v /= 1024; i++; }}
+        return v.toFixed(1) + ' ' + units[i];
+      }}
       async function poll() {{
         const data = await (await fetch('/api/status')).json();
         document.getElementById('stat-frames').textContent = data.frames_captured;
@@ -341,6 +364,19 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
         document.getElementById('stat-temp').textContent =
           data.cpu_temp_celsius === null ? 'n/a' : data.cpu_temp_celsius.toFixed(1) + '°C';
         document.getElementById('tile-temp').className = 'stat-tile ' + tempClass(data.cpu_temp_celsius);
+
+        const diskFill = document.getElementById('disk-fill');
+        const diskLabel = document.getElementById('disk-label');
+        if (data.disk_free_bytes === null || !data.disk_total_bytes) {{
+          diskFill.style.width = '0%';
+          diskLabel.textContent = 'disk usage unavailable';
+        }} else {{
+          const usedPct = 100 * (1 - data.disk_free_bytes / data.disk_total_bytes);
+          diskFill.style.width = usedPct.toFixed(1) + '%';
+          diskFill.className = 'disk-fill ' + diskClass(usedPct);
+          diskLabel.textContent =
+            formatBytes(data.disk_free_bytes) + ' free of ' + formatBytes(data.disk_total_bytes);
+        }}
 
         const logEl = document.getElementById('log');
         const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 5;

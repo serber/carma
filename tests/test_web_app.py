@@ -47,6 +47,14 @@ def test_index_includes_log_tail_section():
     assert 'id="log"' in resp.text
 
 
+def test_index_includes_disk_usage_meter():
+    client = _client()
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'id="disk-fill"' in resp.text
+    assert 'id="disk-label"' in resp.text
+
+
 def test_status_reports_counters_and_self_check():
     client = _client()
     resp = client.get("/api/status")
@@ -58,6 +66,17 @@ def test_status_reports_counters_and_self_check():
     }
     assert "fps" in data
     assert "cpu_temp_celsius" in data
+
+
+def test_status_reports_real_disk_usage_for_existing_images_dir():
+    # _client() uses a real tempdir for images_dir, so disk usage should
+    # resolve to actual numbers, not the "path doesn't exist yet" None case
+    client = _client()
+    resp = client.get("/api/status")
+    data = resp.json()
+    assert isinstance(data["disk_free_bytes"], int)
+    assert isinstance(data["disk_total_bytes"], int)
+    assert data["disk_total_bytes"] > 0
 
 
 def test_log_endpoint_returns_text():
