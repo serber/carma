@@ -5,7 +5,11 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/carma"
-SERVICE_USER="carma"
+# Deliberately not "carma" -- that collides with a common choice of Pi
+# login username (especially likely here, it's the project name), which
+# silently skips useradd below and runs the service as your own login
+# account (no isolation, wrong $HOME, breaks the offline model cache).
+SERVICE_USER="carma-svc"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ $EUID -ne 0 ]]; then
@@ -18,7 +22,14 @@ apt-get update
 apt-get install -y --no-install-recommends \
     python3-venv python3-picamera2 python3-opencv libcap-dev
 
-if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    existing_home="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+    if [[ "$existing_home" != "$INSTALL_DIR" ]]; then
+        echo "error: user '$SERVICE_USER' already exists with home '$existing_home', expected '$INSTALL_DIR'." >&2
+        echo "Running the service as this account would use the wrong \$HOME (breaks the offline model cache) and skip the isolation this script is meant to set up. Pick a different SERVICE_USER, or remove/rename the conflicting account." >&2
+        exit 1
+    fi
+else
     echo "==> creating service user $SERVICE_USER"
     useradd --system --home "$INSTALL_DIR" --groups video --shell /usr/sbin/nologin "$SERVICE_USER"
 fi

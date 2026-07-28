@@ -38,8 +38,7 @@ Goal: mount, power on, see the live frame and confirm it's alive.
       + fps + self-check, polled by the `/` page every second.
 - [x] 10. `scripts/install.sh`: real install logic (venv w/
        `--system-site-packages` for picamera2, pip install, seed
-       config.yaml, install + enable the systemd unit). Not runnable off-Pi
-       (apt-based); will get its first real run at physical bring-up.
+       config.yaml, install + enable the systemd unit).
 - [x] 11. README: bring-up checklist updated + a "Development (off-Pi)"
        section for iterating with `uv` before deploying.
 
@@ -47,8 +46,53 @@ Verified end-to-end off-Pi: ran `python -m carma` with `camera.backend:
 opencv` pointed at a nonexistent device — self-check logs `camera FAILED`,
 service keeps running, `/` and `/api/status` respond normally,
 `frames_captured` stays 0, `/stream.mjpg` serves the placeholder JPEG.
-Real CSI hardware behavior (`Picamera2Source`) still needs a run on the
-actual Pi — first item to confirm at physical bring-up.
+
+**Verified on real hardware** (2026-07-28, Pi 4, Raspberry Pi OS Trixie,
+over SSH on the owner's home Wi-Fi — no AP needed since
+`dashboard.host: 0.0.0.0` already listens on every interface):
+`scripts/install.sh` ran end to end (apt + pip + both model
+pre-downloads), `systemctl start carma` came up clean, dashboard reachable
+from another machine on the LAN, `cpu_temp_celsius` reads a real value
+(56.5°C idle). CSI camera not physically connected yet, so
+`Picamera2Source` itself is still unverified — but `check_camera()`'s
+failure handling was exercised for real (picamera2 raises `IndexError`
+when zero cameras are detected) and behaved exactly as designed: logged
+clearly, service stayed up, dashboard still fully usable.
+
+**Bug found and fixed by this run:** `install.sh` hardcoded the service
+account name to `carma` — which collided with the Pi's own login username
+(also `carma`, picked independently, but a likely collision generally
+since it matches the project name). `useradd` silently no-ops when the
+user already exists, so the systemd service ran as the *human's own login
+account* instead of an isolated system user: wrong `$HOME`
+(`/home/carma` instead of `/opt/carma`), which broke the offline model
+cache (runtime re-downloaded into the wrong location instead of finding
+the install-time cache) and defeated the account isolation the script was
+supposed to set up. Fixed by renaming the service account to `carma-svc`
+and adding a startup check that fails loudly (rather than silently
+proceeding) if that name is ever taken by an account with the wrong home
+directory. Re-verified clean after the fix: correct `$HOME`, cache hit
+("Skipping download... already exists"), correct ownership, `carma-svc`
+correctly in the `video` group.
+
+**CSI camera connected and verified end to end** (same session, Arducam
+16MP IMX519 -- a third-party sensor, not the official Camera Module 3).
+Took two hardware detours, both now documented in README: the ribbon was
+first seated in the DISPLAY connector instead of CAMERA (easy mix-up, two
+similar-looking ports), and once in the right port `camera_auto_detect=1`
+didn't find it since that only reliably catches official Pi camera
+modules -- needed `camera_auto_detect=0` + `dtoverlay=imx519` in
+`/boot/firmware/config.txt` (overlay already ships with this OS image, no
+extra driver install). After that: `check_camera()` logs `camera OK`,
+`Picamera2Source` produces real frames, and the *entire* pipeline ran
+live -- 117 frames captured, 22 motion events, 2 detections, 2 OCR reads,
+all visible on `/api/status` and `/hits` in real time (empty-string /
+"unknown" / 0.00-confidence reads, correctly, since the camera was aimed
+at whatever was in the room, not an actual plate). CPU temp under active
+inference load: 76.9°C -- comfortably below throttling, worth keeping an
+eye on for a car interior in direct sun. This closes out hardware
+verification for stages 1-3's core pipeline; only dedup/watchlist under
+real repeated traffic remain to be seen operating in the field.
 
 ## Stage 2 — Motion + detection
 

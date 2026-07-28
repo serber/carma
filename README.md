@@ -10,12 +10,22 @@ See [PLAN.md](PLAN.md) for the atomic build-order steps and current progress.
 _Filled in as each piece lands — see build order in SPEC.md._
 
 - [ ] Flash Raspberry Pi OS Lite (64-bit, Trixie)
-- [ ] Wire the CSI camera ribbon cable
-- [x] Install carma (`sudo scripts/install.sh`) — creates the `carma` user,
-      a venv at `/opt/carma/.venv` (with `--system-site-packages` for
-      picamera2), seeds `config.yaml`, pre-downloads the plate-detector and
-      OCR models (needs internet once — see `scripts/fetch_models.py`),
-      installs + enables the systemd unit
+- [x] Wire the CSI camera ribbon cable — **power off first**, CSI isn't
+      hot-pluggable. The Pi 4 has two similar-looking connectors; camera
+      goes in the one marked **CAMERA**, not **DISPLAY** (easy to mix up).
+      Push the connector's locking tab up before inserting, down to lock
+      after. If using a **third-party sensor** (e.g. Arducam IMX519, not
+      the official Camera Module 3/IMX708), `camera_auto_detect=1` won't
+      find it — see [Third-party camera sensors](#third-party-camera-sensors)
+      below
+- [x] Install carma (`sudo scripts/install.sh`) — creates the `carma-svc`
+      service user (deliberately not `carma`: that collides with a Pi
+      login username someone might pick, especially since it's the
+      project name — see the script's comment), a venv at
+      `/opt/carma/.venv` (with `--system-site-packages` for picamera2),
+      seeds `config.yaml`, pre-downloads the plate-detector and OCR models
+      (needs internet once — see `scripts/fetch_models.py`), installs +
+      enables the systemd unit
 - [ ] Power on. **While developing**, leave the Pi joined to your regular
       Wi-Fi and open `http://<pi-ip>:8000` (`dashboard.host: 0.0.0.0`
       already listens on every interface, no AP needed — find the IP via
@@ -36,6 +46,32 @@ _Filled in as each piece lands — see build order in SPEC.md._
       ...) so the log line tells you which stage is talking; the same
       recent lines are also on the `/` dashboard (no SSH needed for a
       quick look) along with CPU temperature and FPS
+
+## Third-party camera sensors
+
+`camera_auto_detect=1` (the default in `/boot/firmware/config.txt`) only
+reliably finds official Raspberry Pi camera modules (e.g. Camera Module
+3 / IMX708). A third-party sensor — e.g. an Arducam 16MP IMX519 — needs
+an explicit overlay instead:
+
+```
+camera_auto_detect=0
+dtoverlay=imx519
+```
+
+(`imx519` here is the sensor name, matching a `.dtbo` file under
+`/boot/firmware/overlays/` — swap in whatever's printed on your module.
+Recent Raspberry Pi OS ships overlays for most common third-party sensors
+already; no separate driver install needed.) Reboot, then verify with:
+
+```sh
+rpicam-hello --list-cameras
+```
+
+It should list your sensor with its supported resolutions. Note
+`vcgencmd get_camera` is a legacy tool and often misreports
+`detected=0` even when `rpicam-hello` sees the camera fine on the
+libcamera-based stack — trust `rpicam-hello`, not `vcgencmd`, here.
 
 ## Wi-Fi access point
 
