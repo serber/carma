@@ -25,7 +25,7 @@ from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
 from carma.settings import RuntimeSettings
 from carma.storage.db import Hit, HitStore
-from carma.storage.images import clear_images
+from carma.storage.images import clear_images, images_dir_size
 from carma.sysinfo import cpu_temperature_celsius, disk_usage
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,7 @@ def create_app(
         usage = disk_usage(images_dir)
         data["disk_free_bytes"] = usage.free_bytes if usage else None
         data["disk_total_bytes"] = usage.total_bytes if usage else None
+        data["images_bytes"] = images_dir_size(images_dir)
         data["self_check"] = self_check
         return JSONResponse(data)
 
@@ -92,7 +93,7 @@ def create_app(
     def hits() -> str:
         recent = hit_store.recent(limit=50) if hit_store is not None else []
         total = hit_store.count() if hit_store is not None else 0
-        return _render_hits(recent, total)
+        return _render_hits(recent, total, images_dir_size(images_dir))
 
     @app.post("/api/hits/clear")
     def clear_hits() -> JSONResponse:
@@ -305,6 +306,7 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       <h2>Storage</h2>
       <div class="disk-track"><div class="disk-fill" id="disk-fill"></div></div>
       <p class="disk-label" id="disk-label">loading&hellip;</p>
+      <p class="disk-label" id="images-label">loading&hellip;</p>
       <div class="settings-row">
         <label for="min-confidence">Minimum confidence to store a hit</label>
         <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
@@ -395,6 +397,8 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
           diskLabel.textContent =
             formatBytes(data.disk_free_bytes) + ' free of ' + formatBytes(data.disk_total_bytes);
         }}
+        document.getElementById('images-label').textContent =
+          formatBytes(data.images_bytes) + ' used by stored images';
 
         const logEl = document.getElementById('log');
         const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 5;
@@ -427,7 +431,17 @@ def _confidence_meter(confidence: float) -> str:
     return f'<span class="meter"><span style="width:{pct}%"></span></span>{confidence:.2f}'
 
 
-def _render_hits(hits: list[Hit], total_count: int) -> str:
+def _format_bytes(n: int) -> str:
+    """Mirrors the client-side formatBytes() in _render_index's script."""
+    value = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"  # unreachable, keeps type checkers happy
+
+
+def _render_hits(hits: list[Hit], total_count: int, images_bytes: int) -> str:
     if not hits:
         rows = '<tr><td colspan="6">no hits yet</td></tr>'
     else:
@@ -447,7 +461,12 @@ def _render_hits(hits: list[Hit], total_count: int) -> str:
     body = f"""
     <div class="card">
       <div class="hits-toolbar">
-        <h2>Recent hits</h2>
+        <div>
+          <h2>Recent hits</h2>
+          <p class="hint" style="margin-top:2px;">
+            {total_count} stored &middot; {html.escape(_format_bytes(images_bytes))} of images
+          </p>
+        </div>
         <button id="clear-hits" type="button" class="danger-button">Clear all hits &amp; images</button>
       </div>
       <div class="table-wrap">

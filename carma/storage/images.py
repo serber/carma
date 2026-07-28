@@ -36,3 +36,12 @@ def clear_images(images_dir: str) -> None:
     for entry in directory.iterdir():
         if entry.is_file():
             entry.unlink()
+
+
+def images_dir_size(images_dir: str) -> int:
+    """Total bytes used by files directly in images_dir -- matches exactly
+    what clear_images() would free, not the whole filesystem's usage."""
+    directory = Path(images_dir)
+    if not directory.is_dir():
+        return 0
+    return sum(entry.stat().st_size for entry in directory.iterdir() if entry.is_file())

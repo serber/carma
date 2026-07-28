@@ -1,6 +1,6 @@
 import numpy as np
 
-from carma.storage.images import clear_images, save_hit_images
+from carma.storage.images import clear_images, images_dir_size, save_hit_images
 
 
 def test_saves_both_images_and_returns_filenames(tmp_path):
@@ -50,3 +50,36 @@ def test_clear_images_removes_all_files(tmp_path):
 
 def test_clear_images_on_missing_dir_does_not_raise(tmp_path):
     clear_images(str(tmp_path / "does-not-exist"))  # must not raise
+
+
+def test_images_dir_size_sums_file_sizes(tmp_path):
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    (images_dir / "a.jpg").write_bytes(b"x" * 100)
+    (images_dir / "b.jpg").write_bytes(b"y" * 250)
+
+    assert images_dir_size(str(images_dir)) == 350
+
+
+def test_images_dir_size_zero_for_missing_dir(tmp_path):
+    assert images_dir_size(str(tmp_path / "does-not-exist")) == 0
+
+
+def test_images_dir_size_zero_for_empty_dir(tmp_path):
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    assert images_dir_size(str(images_dir)) == 0
+
+
+def test_images_dir_size_matches_what_clear_would_free(tmp_path):
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    images_dir = tmp_path / "images"
+    save_hit_images(frame, frame, str(images_dir))
+    save_hit_images(frame, frame, str(images_dir))
+
+    size_before = images_dir_size(str(images_dir))
+    assert size_before > 0
+
+    clear_images(str(images_dir))
+
+    assert images_dir_size(str(images_dir)) == 0

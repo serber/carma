@@ -79,6 +79,13 @@ def test_status_reports_real_disk_usage_for_existing_images_dir():
     assert data["disk_total_bytes"] > 0
 
 
+def test_status_reports_images_bytes():
+    client = _client()
+    resp = client.get("/api/status")
+    data = resp.json()
+    assert data["images_bytes"] == 0  # nothing saved in the fresh tempdir
+
+
 def test_log_endpoint_returns_text():
     client = _client()
     resp = client.get("/api/log")
@@ -126,6 +133,29 @@ def test_hits_page_includes_clear_button_with_count():
 
     assert 'id="clear-hits"' in resp.text
     assert "Delete all 2 stored hit(s)" in resp.text
+
+
+def test_hits_page_shows_images_size(tmp_path):
+    hit_store = FakeHitStore()
+    hit_store.insert("2026-07-28T12:00:00+00:00", "123ABC02", 0.91, "KZ", False, "f1.jpg", "c1.jpg")
+    source = FakeSource()
+    counters = Counters()
+    settings = RuntimeSettings(min_confidence=0.0)
+    loop = CaptureLoop(
+        source, counters, MotionDetector(threshold=25, min_area=500), None, None, None,
+        "unused", Deduper(window_seconds=0), Watchlist(enabled=False, plates=[]), settings,
+    )
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    (images_dir / "f1.jpg").write_bytes(b"x" * 2048)
+    self_check = {"config": True, "camera": True, "model": True, "ocr": True, "storage": True}
+    app = create_app(loop, counters, self_check, hit_store, str(images_dir), settings)
+    client = TestClient(app)
+
+    resp = client.get("/hits")
+
+    assert "1 stored" in resp.text
+    assert "2.0 KB of images" in resp.text
 
 
 def test_clear_hits_endpoint_empties_store_and_images(tmp_path):
