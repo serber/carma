@@ -29,10 +29,24 @@ class Picamera2Source(FrameSource):
         )
         self._picam2.configure(config)
         self._picam2.start()
+        self._enable_continuous_autofocus()
         logger.info(
             "picamera2 started resolution=%s framerate=%s",
             self._resolution, self._framerate,
         )
+
+    def _enable_continuous_autofocus(self) -> None:
+        # Fixed-focus modules don't expose AfMode at all; autofocus-capable
+        # ones (e.g. Camera Module 3, Arducam IMX519) default to AfMode
+        # "Manual" with whatever lens position it last had -- continuous AF
+        # is what a curb-side camera needs, since subject distance varies
+        # car to car and libcamera won't engage it on its own.
+        if "AfMode" not in self._picam2.camera_controls:
+            return
+        from libcamera import controls
+
+        self._picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous})
+        logger.info("continuous autofocus enabled")
 
     def stop(self) -> None:
         if self._picam2 is not None:
