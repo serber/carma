@@ -1,7 +1,7 @@
 # Structured logging setup, called once at startup. Every module logs via
 # logging.getLogger(__name__), so output is labelled per pipeline stage
 # (carma.capture.picamera2_source, carma.pipeline.motion, carma.web.app, ...)
-# and `journalctl -u carma -f -o cat` reads as one line per event, stage
+# and `journalctl -u carma-app -f -o cat` reads as one line per event, stage
 # visible at a glance. Also keeps an in-memory tail of recent log lines for
 # the dashboard (get_recent_logs()) -- journalctl needs a shell, the
 # dashboard is what's reachable from a phone at mount time.
@@ -26,7 +26,7 @@ class _RingBufferHandler(logging.Handler):
 def configure_logging(level: str = "INFO") -> None:
     """Configure the root logger. journald adds its own timestamp/priority
     when carma runs under systemd (StandardOutput=journal in
-    systemd/carma.service); the explicit format here keeps output just as
+    systemd/carma-app.service); the explicit format here keeps output just as
     readable when running `carma` directly in a terminal.
     """
     formatter = logging.Formatter(_FORMAT, datefmt=_DATEFMT)

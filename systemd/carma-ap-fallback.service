@@ -1,0 +1,16 @@
+[Unit]
+Description=carma - fall back to the carma-ap Wi-Fi hotspot if no Wi-Fi network is reachable
+After=NetworkManager.service
+Wants=NetworkManager.service
+Before=carma-app.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/carma-app/scripts/carma-ap-fallback.sh
+RemainAfterExit=yes
+
+# how long to wait for a regular Wi-Fi connection before starting the AP
+#Environment=CARMA_WIFI_TIMEOUT=45
+
+[Install]
+WantedBy=multi-user.target

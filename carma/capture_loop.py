@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import UTC, datetime
 
 import cv2
@@ -56,6 +57,7 @@ class CaptureLoop:
         self._stop_event = threading.Event()
         self._frame_lock = threading.Lock()
         self._latest_jpeg: bytes | None = None
+        self._last_detect_at: float = float("-inf")
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -95,10 +97,34 @@ class CaptureLoop:
                 continue
             self._counters.increment("frames_captured")
             try:
+                frame = self._apply_color_mode(frame)
                 detections = self._process(frame)
                 self._encode(frame, detections)
             except Exception:
                 logger.exception("error processing frame; continuing")
+
+    def _apply_color_mode(self, frame: np.ndarray) -> np.ndarray:
+        if self._settings.color_mode != "grayscale":
+            return frame
+        # Desaturate but keep 3 channels -- detection/OCR/motion/storage all
+        # expect a BGR-shaped array, this just makes every channel equal.
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    def _detection_due(self) -> bool:
+        """Caps how often the expensive detect+OCR pass runs during heavy,
+        continuous motion (see RuntimeSettings.detect_interval_ms) -- a
+        passing car spans many frames, so skipping most of them barely
+        affects whether it gets caught, while cutting sustained CPU load
+        and heat a lot. 0 (default) means never skip."""
+        interval_s = self._settings.detect_interval_ms / 1000.0
+        if interval_s <= 0:
+            return True
+        now = time.monotonic()
+        if now - self._last_detect_at < interval_s:
+            return False
+        self._last_detect_at = now
+        return True
 
     def _process(self, frame: np.ndarray) -> list[tuple[Box, str | None]]:
         if not self._motion_detector.update(frame):
@@ -107,6 +133,11 @@ class CaptureLoop:
 
         if self._plate_detector is None:
             return []
+
+        if not self._detection_due():
+            self._counters.increment("detections_throttled")
+            return []
+
         boxes = self._plate_detector.detect(frame)
         if boxes:
             self._counters.increment("detections", by=len(boxes))

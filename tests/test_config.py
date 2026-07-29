@@ -11,6 +11,8 @@ def test_loads_example_config():
     config = load_config(EXAMPLE)
     assert config.camera.backend == "picamera2"
     assert config.camera.resolution == (1280, 720)
+    assert config.camera.color_mode == "color"
+    assert config.detection.min_interval_ms == 0
     assert config.motion.roi is None
     assert config.detection.model_name == "yolo-v9-t-384-license-plate-end2end"
     assert config.ocr.model_name == "cct-xs-v2-global-model"
@@ -34,6 +36,20 @@ def test_invalid_camera_backend(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("camera:\n  backend: gopro\n")
     with pytest.raises(ConfigError, match="camera.backend"):
+        load_config(path)
+
+
+def test_negative_detection_min_interval_ms(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("detection:\n  min_interval_ms: -1\n")
+    with pytest.raises(ConfigError, match="detection.min_interval_ms"):
+        load_config(path)
+
+
+def test_invalid_camera_color_mode(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("camera:\n  color_mode: sepia\n")
+    with pytest.raises(ConfigError, match="camera.color_mode"):
         load_config(path)
 
 

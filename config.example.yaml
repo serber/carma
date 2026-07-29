@@ -1,11 +1,15 @@
 # Copy to config.yaml and adjust. Paths are relative to the working
-# directory carma is started from (see systemd/carma.service).
+# directory carma is started from (see systemd/carma-app.service).
 
 camera:
   backend: picamera2   # picamera2 (CSI, default) | opencv (USB)
   device: 0             # opencv backend only: V4L2 index or /dev/videoN
   resolution: [1280, 720]
   framerate: 30
+  # color (default) | grayscale. Adjustable live from the dashboard's
+  # Settings page without a restart; see storage.min_confidence below for
+  # how that persistence works.
+  color_mode: color
 
 motion:
   threshold: 25          # frame-diff sensitivity; lower = more sensitive
@@ -18,6 +22,11 @@ detection:
   # Same detector fast-alpr pairs with fast-plate-ocr by default.
   model_name: yolo-v9-t-384-license-plate-end2end
   confidence_threshold: 0.4
+  # Skip detection/OCR on a motion frame if less than this many ms have
+  # passed since the last pass -- caps CPU/heat load during heavy,
+  # continuous motion. 0 = no throttling (detect on every motion frame).
+  # Adjustable live from the dashboard's Settings page without a restart.
+  min_interval_ms: 0
 
 ocr:
   # Registered fast-plate-ocr model (auto-downloaded once, see

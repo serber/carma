@@ -75,7 +75,7 @@ tell why." Design against that from day one:
   you which stage is stuck (dead camera → 0 frames; threshold too high → frames
   but 0 motion; bad angle/focus → motion but 0 detections; unreadable → 0 OCR).
 - **Verbose structured logging** to journald at every stage, viewable with
-  `journalctl -u carma -f`.
+  `journalctl -u carma-app -f`.
 - **Startup self-check**, logged clearly: camera OK / model loaded OK / config
   OK — so init failures are visible, not silent.
 - **`systemctl status`** must cleanly reflect running vs crashed.
@@ -121,8 +121,9 @@ carma/
   service.py      # main loop wiring the pipeline
   __main__.py
 config.example.yaml
-systemd/carma.service
+systemd/carma-app.service
 scripts/install.sh
+scripts/bootstrap.sh   # one-command clone+install
 README.md         # bring-up checklist: flash, wire camera, AP setup, run, aim
 ```
 

@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
-# Installs carma to /opt/carma and enables the systemd service. Run as root
-# on Raspberry Pi OS Lite (64-bit, Trixie) after cloning this repo.
+# Installs carma to /opt/carma-app and enables the systemd service. Run as
+# root on Raspberry Pi OS Lite (64-bit, Trixie) after cloning this repo --
+# or via scripts/bootstrap.sh for a one-command clone+install.
 # See README.md for the full bring-up checklist.
 set -euo pipefail
 
-INSTALL_DIR="/opt/carma"
+SERVICE_NAME="carma-app"
+INSTALL_DIR="/opt/$SERVICE_NAME"
 # Deliberately not "carma" -- that collides with a common choice of Pi
 # login username (especially likely here, it's the project name), which
 # silently skips useradd below and runs the service as your own login
 # account (no isolation, wrong $HOME, breaks the offline model cache).
 SERVICE_USER="carma-svc"
+# Fixed defaults for the carma-ap hotspot, overridable via env vars, so a
+# fresh install never needs interactive input. See README.md "Wi-Fi access
+# point" for what these mean and how to change them post-install.
+AP_CON_NAME="carma-ap"
+AP_SSID="${CARMA_AP_SSID:-carma-ap}"
+AP_PASSWORD="${CARMA_AP_PASSWORD:-carmapwd}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ $EUID -ne 0 ]]; then
@@ -48,8 +56,8 @@ if [[ ! -f "$INSTALL_DIR/config.yaml" ]]; then
     cp "$INSTALL_DIR/config.example.yaml" "$INSTALL_DIR/config.yaml"
 fi
 
-# HOME must match what the systemd unit's User=carma resolves to
-# (/opt/carma), so the model ends up cached where the service actually
+# HOME must match what the systemd unit's User=carma-svc resolves to
+# ($INSTALL_DIR), so the model ends up cached where the service actually
 # looks for it at runtime -- otherwise it'd cache under root's home here
 # and the device would try (and fail) to download again offline on first
 # boot.
@@ -60,16 +68,53 @@ HOME="$INSTALL_DIR" "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/scripts/fetch_
 mkdir -p "$INSTALL_DIR/data/images" "$INSTALL_DIR/models"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
-echo "==> installing systemd unit"
-cp "$INSTALL_DIR/systemd/carma.service" /etc/systemd/system/carma.service
+echo "==> installing systemd units"
+chmod +x "$INSTALL_DIR/scripts/carma-ap-fallback.sh"
+cp "$INSTALL_DIR/systemd/$SERVICE_NAME.service" "/etc/systemd/system/$SERVICE_NAME.service"
+cp "$INSTALL_DIR/systemd/carma-ap-fallback.service" /etc/systemd/system/carma-ap-fallback.service
 systemctl daemon-reload
-systemctl enable carma
+systemctl enable "$SERVICE_NAME" carma-ap-fallback
+
+echo "==> installing Wi-Fi settings helper (lets the dashboard join a new network)"
+chmod +x "$INSTALL_DIR/scripts/carma-wifi.sh"
+install -m 0440 "$INSTALL_DIR/systemd/carma-wifi.sudoers" /etc/sudoers.d/carma-wifi
+if ! visudo -c -f /etc/sudoers.d/carma-wifi >/dev/null; then
+    echo "error: generated /etc/sudoers.d/carma-wifi failed validation, removing it" >&2
+    rm -f /etc/sudoers.d/carma-wifi
+    exit 1
+fi
+
+echo "==> installing restart/reboot helper (lets the dashboard restart the service or the device)"
+chmod +x "$INSTALL_DIR/scripts/carma-restart.sh"
+install -m 0440 "$INSTALL_DIR/systemd/carma-restart.sudoers" /etc/sudoers.d/carma-restart
+if ! visudo -c -f /etc/sudoers.d/carma-restart >/dev/null; then
+    echo "error: generated /etc/sudoers.d/carma-restart failed validation, removing it" >&2
+    rm -f /etc/sudoers.d/carma-restart
+    exit 1
+fi
+
+if ! command -v nmcli >/dev/null 2>&1; then
+    echo "==> nmcli not found, skipping $AP_CON_NAME hotspot setup (set it up manually later, see README.md)"
+elif nmcli -t -f NAME con show | grep -qx "$AP_CON_NAME"; then
+    echo "==> $AP_CON_NAME Wi-Fi profile already exists, leaving it alone"
+else
+    echo "==> creating the $AP_CON_NAME hotspot profile (ssid=$AP_SSID, autoconnect no)"
+    nmcli con add type wifi ifname wlan0 con-name "$AP_CON_NAME" autoconnect no ssid "$AP_SSID"
+    nmcli con modify "$AP_CON_NAME" 802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 7
+    nmcli con modify "$AP_CON_NAME" wifi-sec.key-mgmt wpa-psk
+    nmcli con modify "$AP_CON_NAME" wifi-sec.psk "$AP_PASSWORD"
+    nmcli con modify "$AP_CON_NAME" ipv4.method shared
+    nmcli con modify "$AP_CON_NAME" ipv4.address 192.168.4.1/24
+fi
 
 cat <<MSG
 ==> done.
     - review $INSTALL_DIR/config.yaml (camera backend/resolution, dashboard port)
     - the plate detector model was pre-downloaded and cached; re-run
       scripts/fetch_models.py after changing detection.model_name
-    - start it:   systemctl start carma
-    - watch it:   journalctl -u carma -f
+    - start it:   systemctl start $SERVICE_NAME
+    - watch it:   journalctl -u $SERVICE_NAME -f
+    - hotspot:    $AP_SSID / $AP_PASSWORD at 192.168.4.1:8000 (only comes up
+                  automatically if no known Wi-Fi is reachable at boot --
+                  see carma-ap-fallback.service)
 MSG

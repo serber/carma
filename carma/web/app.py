@@ -3,10 +3,12 @@
 # at http://192.168.4.1:8000 over the Pi's own AP (see README).
 from __future__ import annotations
 
+import dataclasses
 import html
 import logging
 import time
 from pathlib import Path
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -20,10 +22,11 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from carma import device, wifi
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
-from carma.settings import RuntimeSettings
+from carma.settings import MAX_DETECT_INTERVAL_MS, RuntimeSettings
 from carma.storage.db import Hit, HitStore
 from carma.storage.images import clear_images, images_dir_size
 from carma.sysinfo import cpu_temperature_celsius, disk_usage
@@ -32,7 +35,18 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsUpdate(BaseModel):
-    min_confidence: float = Field(ge=0.0, le=1.0)
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    color_mode: Literal["color", "grayscale"] | None = None
+    detect_interval_ms: int | None = Field(default=None, ge=0, le=MAX_DETECT_INTERVAL_MS)
+
+
+class WifiConnectRequest(BaseModel):
+    ssid: str = Field(min_length=1, max_length=32)
+    password: str = Field(default="", max_length=63)
+
+
+class WifiForgetRequest(BaseModel):
+    ssid: str = Field(min_length=1, max_length=32)
 
 
 MJPEG_BOUNDARY = "frame"
@@ -54,17 +68,32 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _render_index(self_check, settings.min_confidence)
+        return _render_index(self_check)
 
     @app.get("/api/settings")
     def get_settings() -> JSONResponse:
-        return JSONResponse({"min_confidence": settings.min_confidence})
+        return JSONResponse({
+            "min_confidence": settings.min_confidence,
+            "color_mode": settings.color_mode,
+            "detect_interval_ms": settings.detect_interval_ms,
+        })
 
     @app.post("/api/settings")
     def update_settings(body: SettingsUpdate) -> JSONResponse:
-        settings.min_confidence = body.min_confidence
-        logger.info("min_confidence set to %.2f via dashboard", body.min_confidence)
-        return JSONResponse({"min_confidence": settings.min_confidence})
+        if body.min_confidence is not None:
+            settings.min_confidence = body.min_confidence
+            logger.info("min_confidence set to %.2f via dashboard", body.min_confidence)
+        if body.color_mode is not None:
+            settings.color_mode = body.color_mode
+            logger.info("color_mode set to %s via dashboard", body.color_mode)
+        if body.detect_interval_ms is not None:
+            settings.detect_interval_ms = body.detect_interval_ms
+            logger.info("detect_interval_ms set to %d via dashboard", body.detect_interval_ms)
+        return JSONResponse({
+            "min_confidence": settings.min_confidence,
+            "color_mode": settings.color_mode,
+            "detect_interval_ms": settings.detect_interval_ms,
+        })
 
     @app.get("/api/status")
     def status() -> JSONResponse:
@@ -103,6 +132,48 @@ def create_app(
         clear_images(images_dir)
         logger.warning("cleared %d hit(s) and their images via dashboard", count)
         return JSONResponse({"cleared": count})
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page() -> str:
+        return _render_settings(
+            wifi.available(), settings.min_confidence, settings.color_mode, settings.detect_interval_ms,
+        )
+
+    @app.post("/api/device/restart-service")
+    def restart_service() -> JSONResponse:
+        ok, message = device.restart_service()
+        logger.warning("service restart requested via dashboard: %s", "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
+
+    @app.post("/api/device/reboot")
+    def reboot_device() -> JSONResponse:
+        ok, message = device.reboot_device()
+        logger.warning("device reboot requested via dashboard: %s", "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
+
+    @app.get("/api/wifi/status")
+    def wifi_status() -> JSONResponse:
+        return JSONResponse(dataclasses.asdict(wifi.get_status()))
+
+    @app.get("/api/wifi/networks")
+    def wifi_networks() -> JSONResponse:
+        return JSONResponse({"networks": [dataclasses.asdict(n) for n in wifi.scan_networks()]})
+
+    @app.get("/api/wifi/saved")
+    def wifi_saved() -> JSONResponse:
+        return JSONResponse({"profiles": [dataclasses.asdict(p) for p in wifi.list_saved_profiles()]})
+
+    @app.post("/api/wifi/connect")
+    def wifi_connect(body: WifiConnectRequest) -> JSONResponse:
+        ok, message = wifi.connect(body.ssid, body.password)
+        logger.info("wifi connect to %r via dashboard: %s", body.ssid, "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
+
+    @app.post("/api/wifi/forget")
+    def wifi_forget(body: WifiForgetRequest) -> JSONResponse:
+        ok, message = wifi.forget(body.ssid)
+        logger.info("wifi forget of %r via dashboard: %s", body.ssid, "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
 
     return app
 
@@ -200,6 +271,8 @@ _STYLE = """
     .stat-tile { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }
     .stat-tile .value { font-size: 26px; font-weight: 600; }
     .stat-tile .label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .stat-tile .value.pipeline-value { font-size: 18px; white-space: nowrap; }
+    .pipeline-arrow { color: var(--text-muted); font-weight: 400; padding: 0 4px; }
     .stat-tile.warning .value { color: var(--warning); }
     .stat-tile.critical .value { color: var(--critical); }
     #log {
@@ -230,13 +303,14 @@ _STYLE = """
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .settings-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .settings-row label { flex: 0 0 auto; min-width: 92px; }
     .settings-row input[type="range"] { accent-color: var(--accent); flex: 1 1 160px; }
     .settings-row output { font-variant-numeric: tabular-nums; min-width: 3.5em; }
-    .settings-row button {
+    .primary-button {
       background: var(--accent); color: #fff; border: none; border-radius: 6px;
       padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
     }
-    .settings-row button:hover { opacity: 0.9; }
+    .primary-button:hover { opacity: 0.9; }
     .settings-row .saved { color: var(--good); font-size: 13px; opacity: 0; transition: opacity 0.2s; }
     .settings-row .saved.show { opacity: 1; }
     .hint { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
@@ -254,6 +328,38 @@ _STYLE = """
       padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
     }
     .danger-button:hover { opacity: 0.9; }
+    .secondary-button {
+      background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .secondary-button:hover { opacity: 0.9; }
+    .mode-button {
+      background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 14px 6px 30px; font-size: 13px; font-weight: 600; cursor: pointer;
+      position: relative;
+    }
+    .mode-button:hover { opacity: 0.9; }
+    .mode-button::before {
+      content: ""; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+      width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--text-muted);
+      background: transparent;
+    }
+    .mode-button.active {
+      background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700;
+    }
+    .mode-button.active::before { background: #fff; border-color: #fff; }
+    .network-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; cursor: pointer;
+    }
+    .network-row:last-child { border-bottom: none; }
+    .network-row:hover { background: var(--surface-2); }
+    .network-row.static { cursor: default; }
+    .network-row.static:hover { background: none; }
+    .settings-row input[type="text"], .settings-row input[type="password"] {
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); padding: 6px 10px; font-size: 14px; flex: 1 1 200px;
+    }
 """
 
 
@@ -262,7 +368,11 @@ def _page(title: str, active: str, body: str) -> str:
         css_class = ' class="active"' if key == active else ""
         return f'<a href="{href}"{css_class}>{label}</a>'
 
-    nav = nav_link("/", "Live", "live") + nav_link("/hits", "Hits", "hits")
+    nav = (
+        nav_link("/", "Live", "live")
+        + nav_link("/hits", "Hits", "hits")
+        + nav_link("/settings", "Settings", "settings")
+    )
     return f"""<!doctype html>
 <html>
 <head>
@@ -283,7 +393,7 @@ def _page(title: str, active: str, body: str) -> str:
 </html>"""
 
 
-def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
+def _render_index(self_check: dict[str, bool]) -> str:
     badges = "".join(
         f'<span class="badge{"" if ok else " fail"}">'
         f'<span class="dot"></span>{html.escape(name)}: {"OK" if ok else "FAILED"}'
@@ -303,55 +413,31 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       </div>
     </div>
     <div class="card">
+      <h2>Counters</h2>
+      <div class="stat-grid">
+        <div class="stat-tile"><div class="value" id="stat-frames">&ndash;</div><div class="label">Frames captured</div></div>
+        <div class="stat-tile">
+          <div class="value pipeline-value">
+            <span id="stat-motion">&ndash;</span><span class="pipeline-arrow">&rarr;</span><span id="stat-detections">&ndash;</span><span class="pipeline-arrow">&rarr;</span><span id="stat-ocr">&ndash;</span>
+          </div>
+          <div class="label">Motion &rarr; detections &rarr; OCR reads</div>
+        </div>
+        <div class="stat-tile"><div class="value" id="stat-throttled">&ndash;</div><div class="label">Detections throttled</div></div>
+        <div class="stat-tile"><div class="value" id="stat-fps">&ndash;</div><div class="label">FPS</div></div>
+        <div class="stat-tile" id="tile-temp"><div class="value" id="stat-temp">&ndash;</div><div class="label">CPU temp</div></div>
+      </div>
+    </div>
+    <div class="card">
       <h2>Storage</h2>
       <div class="disk-track"><div class="disk-fill" id="disk-fill"></div></div>
       <p class="disk-label" id="disk-label">loading&hellip;</p>
       <p class="disk-label" id="images-label">loading&hellip;</p>
-      <div class="settings-row">
-        <label for="min-confidence">Minimum confidence to store a hit</label>
-        <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
-        <output id="min-confidence-value">{min_confidence:.2f}</output>
-        <button id="save-settings" type="button">Save</button>
-        <span class="saved" id="settings-saved">Saved</span>
-      </div>
-      <p class="hint">
-        Reads below this confidence still show live on the preview and count
-        toward OCR reads -- they just aren't written to <a href="/hits">Hits</a>.
-        0 stores everything. Saved value survives a restart.
-      </p>
-    </div>
-    <div class="card">
-      <h2>Counters</h2>
-      <div class="stat-grid">
-        <div class="stat-tile"><div class="value" id="stat-frames">&ndash;</div><div class="label">Frames captured</div></div>
-        <div class="stat-tile"><div class="value" id="stat-motion">&ndash;</div><div class="label">Motion events</div></div>
-        <div class="stat-tile"><div class="value" id="stat-detections">&ndash;</div><div class="label">Detections</div></div>
-        <div class="stat-tile"><div class="value" id="stat-ocr">&ndash;</div><div class="label">OCR reads</div></div>
-        <div class="stat-tile"><div class="value" id="stat-fps">&ndash;</div><div class="label">FPS</div></div>
-        <div class="stat-tile" id="tile-temp"><div class="value" id="stat-temp">&ndash;</div><div class="label">CPU temp</div></div>
-      </div>
     </div>
     <div class="card">
       <h2>Log tail</h2>
       <div id="log">loading&hellip;</div>
     </div>
     <script>
-      const minConfidenceInput = document.getElementById('min-confidence');
-      const minConfidenceValue = document.getElementById('min-confidence-value');
-      minConfidenceInput.addEventListener('input', () => {{
-        minConfidenceValue.textContent = parseFloat(minConfidenceInput.value).toFixed(2);
-      }});
-      document.getElementById('save-settings').addEventListener('click', async () => {{
-        await fetch('/api/settings', {{
-          method: 'POST',
-          headers: {{'Content-Type': 'application/json'}},
-          body: JSON.stringify({{min_confidence: parseFloat(minConfidenceInput.value)}}),
-        }});
-        const saved = document.getElementById('settings-saved');
-        saved.classList.add('show');
-        setTimeout(() => saved.classList.remove('show'), 1500);
-      }});
-
       function tempClass(t) {{
         if (t === null || t === undefined) return '';
         if (t >= 80) return 'critical';
@@ -380,6 +466,7 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
         document.getElementById('stat-motion').textContent = data.motion_events;
         document.getElementById('stat-detections').textContent = data.detections;
         document.getElementById('stat-ocr').textContent = data.ocr_reads;
+        document.getElementById('stat-throttled').textContent = data.detections_throttled;
         document.getElementById('stat-fps').textContent = data.fps;
         document.getElementById('stat-temp').textContent =
           data.cpu_temp_celsius === null ? 'n/a' : data.cpu_temp_celsius.toFixed(1) + '°C';
@@ -416,6 +503,329 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       poll();
     </script>"""
     return _page("carma", "live", body)
+
+
+def _wifi_fragment(nmcli_available: bool) -> str:
+    """Wi-Fi status/scan/connect/saved cards, embedded in the Settings page."""
+    unavailable_hint = (
+        ""
+        if nmcli_available
+        else '<p class="hint">nmcli was not found -- Wi-Fi management only works on the Pi itself.</p>'
+    )
+    return f"""
+    <div class="card">
+      <h2>Current connection</h2>
+      <div class="badges">
+        <span class="badge" id="wifi-mode-badge"><span class="dot"></span><span id="wifi-mode-text">loading&hellip;</span></span>
+      </div>
+      <p class="hint" id="wifi-detail">&nbsp;</p>
+      {unavailable_hint}
+    </div>
+    <div class="card">
+      <h2>Available networks</h2>
+      <p class="hint" id="scan-hint">Scanning&hellip;</p>
+      <div id="network-list"></div>
+      <p style="margin: 12px 0 0;"><button id="rescan" type="button" class="secondary-button">Rescan</button></p>
+    </div>
+    <div class="card">
+      <h2>Connect to a network</h2>
+      <div class="settings-row" style="margin-bottom: 10px;">
+        <label for="wifi-ssid">SSID</label>
+        <input type="text" id="wifi-ssid" maxlength="32" placeholder="Network name">
+      </div>
+      <div class="settings-row">
+        <label for="wifi-password">Password</label>
+        <input type="password" id="wifi-password" maxlength="63" placeholder="leave blank for open networks">
+      </div>
+      <p style="margin: 12px 0 0;"><button id="wifi-connect" type="button" class="primary-button">Connect</button></p>
+      <p class="hint" id="wifi-connect-status">&nbsp;</p>
+      <p class="hint">
+        Connecting switches wlan0 off the carma hotspot -- if you're on the
+        "carma" Wi-Fi right now, this device will drop off it. It's
+        reachable again at the new network's IP, or back on carma-ap if
+        the connection fails.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Saved networks</h2>
+      <div id="saved-list" class="hint">loading&hellip;</div>
+    </div>
+    <script>
+      function escapeHtml(s) {{
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+      }}
+
+      async function loadWifiStatus() {{
+        const badge = document.getElementById('wifi-mode-badge');
+        const modeText = document.getElementById('wifi-mode-text');
+        const detail = document.getElementById('wifi-detail');
+        const labels = {{
+          client: 'Connected', ap: 'Hotspot (carma-ap)',
+          disconnected: 'Disconnected', unavailable: 'Unavailable',
+        }};
+        try {{
+          const data = await (await fetch('/api/wifi/status')).json();
+          modeText.textContent = labels[data.mode] || data.mode;
+          badge.className = 'badge' + (data.mode === 'client' ? '' : ' fail');
+          if (data.mode === 'client') {{
+            detail.textContent = (data.ssid || '') + ' \\u2014 ' + (data.ip_address || 'no IP yet');
+          }} else if (data.mode === 'ap') {{
+            detail.textContent = 'Serving its own hotspot -- no known network in range.';
+          }} else {{
+            detail.textContent = '';
+          }}
+        }} catch (e) {{
+          modeText.textContent = 'error';
+        }}
+      }}
+
+      async function loadNetworks() {{
+        const list = document.getElementById('network-list');
+        const hint = document.getElementById('scan-hint');
+        hint.textContent = 'Scanning\\u2026';
+        try {{
+          const data = await (await fetch('/api/wifi/networks')).json();
+          list.innerHTML = '';
+          if (data.networks.length === 0) {{
+            hint.textContent = 'No networks found.';
+            return;
+          }}
+          hint.textContent = '';
+          for (const net of data.networks) {{
+            const row = document.createElement('div');
+            row.className = 'network-row';
+            row.innerHTML =
+              '<span>' + (net.in_use ? '&#9679; ' : '') + escapeHtml(net.ssid) + '</span>' +
+              '<span class="hint">' + (net.secured ? '&#128274;' : 'open') + ' ' + net.signal + '%</span>';
+            row.addEventListener('click', () => {{
+              document.getElementById('wifi-ssid').value = net.ssid;
+              document.getElementById('wifi-password').focus();
+            }});
+            list.appendChild(row);
+          }}
+        }} catch (e) {{
+          hint.textContent = 'Scan failed.';
+        }}
+      }}
+
+      async function loadSaved() {{
+        const list = document.getElementById('saved-list');
+        try {{
+          const data = await (await fetch('/api/wifi/saved')).json();
+          if (data.profiles.length === 0) {{
+            list.textContent = 'No saved networks yet.';
+            return;
+          }}
+          list.innerHTML = '';
+          for (const p of data.profiles) {{
+            const row = document.createElement('div');
+            row.className = 'network-row static';
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = p.name;
+            const btn = document.createElement('button');
+            btn.textContent = 'Forget';
+            btn.type = 'button';
+            btn.className = 'danger-button';
+            btn.addEventListener('click', async (ev) => {{
+              ev.stopPropagation();
+              if (!confirm('Forget "' + p.name + '"?')) return;
+              await fetch('/api/wifi/forget', {{
+                method: 'POST', headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ssid: p.name}}),
+              }});
+              loadSaved();
+            }});
+            row.appendChild(nameSpan);
+            row.appendChild(btn);
+            list.appendChild(row);
+          }}
+        }} catch (e) {{
+          list.textContent = 'Failed to load.';
+        }}
+      }}
+
+      document.getElementById('rescan').addEventListener('click', loadNetworks);
+
+      document.getElementById('wifi-connect').addEventListener('click', async () => {{
+        const ssid = document.getElementById('wifi-ssid').value.trim();
+        const password = document.getElementById('wifi-password').value;
+        const status = document.getElementById('wifi-connect-status');
+        if (!ssid) {{ status.textContent = 'Enter an SSID.'; return; }}
+        status.textContent = 'Connecting\\u2026';
+        try {{
+          const resp = await fetch('/api/wifi/connect', {{
+            method: 'POST', headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{ssid, password}}),
+          }});
+          const data = await resp.json();
+          status.textContent = data.ok ? 'Connected.' : ('Failed: ' + data.message);
+          if (data.ok) {{
+            document.getElementById('wifi-password').value = '';
+            loadWifiStatus();
+            loadSaved();
+          }}
+        }} catch (e) {{
+          status.textContent = 'Request failed.';
+        }}
+      }});
+
+      loadWifiStatus();
+      loadNetworks();
+      loadSaved();
+    </script>"""
+
+
+def _detect_interval_label(ms: int) -> str:
+    if ms <= 0:
+        return "off"
+    return f"{ms} ms (~{1000.0 / ms:.1f}/s)"
+
+
+def _render_settings(
+    nmcli_available: bool, min_confidence: float, color_mode: str, detect_interval_ms: int,
+) -> str:
+    body = f"""
+    <div class="card">
+      <h2>Camera</h2>
+      <div class="settings-row">
+        <span>Color mode</span>
+        <button type="button" class="mode-button" id="mode-color" data-mode="color">Color</button>
+        <button type="button" class="mode-button" id="mode-grayscale" data-mode="grayscale">Black &amp; white</button>
+      </div>
+      <p class="hint">
+        Applies to the live preview, detection/OCR, and stored hit images.
+        Takes effect on the next captured frame -- no restart needed.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Detection</h2>
+      <div class="settings-row">
+        <label for="min-confidence">Minimum confidence to store a hit</label>
+        <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
+        <output id="min-confidence-value">{min_confidence:.2f}</output>
+        <button id="save-confidence" type="button" class="primary-button">Save</button>
+        <span class="saved" id="confidence-saved">Saved</span>
+      </div>
+      <p class="hint">
+        Reads below this confidence still show live on the preview and count
+        toward OCR reads -- they just aren't written to <a href="/hits">Hits</a>.
+        0 stores everything. Saved value survives a restart.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Performance</h2>
+      <div class="settings-row">
+        <label for="detect-interval">Minimum time between detection passes</label>
+        <input type="range" id="detect-interval" min="0" max="2000" step="100" value="{detect_interval_ms}">
+        <output id="detect-interval-value">{_detect_interval_label(detect_interval_ms)}</output>
+        <button id="save-detect-interval" type="button" class="primary-button">Save</button>
+        <span class="saved" id="detect-interval-saved">Saved</span>
+      </div>
+      <p class="hint">
+        During heavy, continuous motion (busy traffic), every motion frame
+        would otherwise get a full detection+OCR pass -- expensive, and
+        the main cause of CPU heat and FPS drops when the Pi is under
+        load. A passing car spans many frames, so skipping most of them
+        barely affects catch rate. 0 = off (detect on every motion frame,
+        the original behavior). Watch "Throttled" on <a href="/">Live</a>
+        to see it kick in.
+      </p>
+    </div>
+    {_wifi_fragment(nmcli_available)}
+    <div class="card">
+      <h2>Restart</h2>
+      <div class="settings-row">
+        <button id="restart-service" type="button" class="secondary-button">Restart carma-app service</button>
+        <button id="reboot-device" type="button" class="danger-button">Reboot device</button>
+      </div>
+      <p class="hint" id="restart-status">&nbsp;</p>
+      <p class="hint">
+        Restarting the service takes a few seconds and briefly drops the
+        live preview. Rebooting takes longer, and also drops Wi-Fi if
+        you're connected to carma-ap right now.
+      </p>
+    </div>
+    <script>
+      const modeButtons = document.querySelectorAll('.mode-button');
+      function setActiveMode(mode) {{
+        modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
+      }}
+      setActiveMode('{color_mode}');
+      modeButtons.forEach(btn => {{
+        btn.addEventListener('click', async () => {{
+          await fetch('/api/settings', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{color_mode: btn.dataset.mode}}),
+          }});
+          setActiveMode(btn.dataset.mode);
+        }});
+      }});
+
+      const minConfidenceInput = document.getElementById('min-confidence');
+      const minConfidenceValue = document.getElementById('min-confidence-value');
+      minConfidenceInput.addEventListener('input', () => {{
+        minConfidenceValue.textContent = parseFloat(minConfidenceInput.value).toFixed(2);
+      }});
+      document.getElementById('save-confidence').addEventListener('click', async () => {{
+        await fetch('/api/settings', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{min_confidence: parseFloat(minConfidenceInput.value)}}),
+        }});
+        const saved = document.getElementById('confidence-saved');
+        saved.classList.add('show');
+        setTimeout(() => saved.classList.remove('show'), 1500);
+      }});
+
+      function formatInterval(ms) {{
+        return ms <= 0 ? 'off' : ms + ' ms (~' + (1000 / ms).toFixed(1) + '/s)';
+      }}
+      const detectIntervalInput = document.getElementById('detect-interval');
+      const detectIntervalValue = document.getElementById('detect-interval-value');
+      detectIntervalInput.addEventListener('input', () => {{
+        detectIntervalValue.textContent = formatInterval(parseInt(detectIntervalInput.value, 10));
+      }});
+      document.getElementById('save-detect-interval').addEventListener('click', async () => {{
+        await fetch('/api/settings', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{detect_interval_ms: parseInt(detectIntervalInput.value, 10)}}),
+        }});
+        const saved = document.getElementById('detect-interval-saved');
+        saved.classList.add('show');
+        setTimeout(() => saved.classList.remove('show'), 1500);
+      }});
+
+      document.getElementById('restart-service').addEventListener('click', async () => {{
+        if (!confirm('Restart the carma-app service? The live preview drops for a few seconds.')) return;
+        const status = document.getElementById('restart-status');
+        status.textContent = 'Restarting\\u2026';
+        try {{
+          const resp = await fetch('/api/device/restart-service', {{ method: 'POST' }});
+          const data = await resp.json();
+          status.textContent = data.ok ? 'Restarting now.' : ('Failed: ' + data.message);
+        }} catch (e) {{
+          status.textContent = 'Request failed.';
+        }}
+      }});
+
+      document.getElementById('reboot-device').addEventListener('click', async () => {{
+        if (!confirm('Reboot the whole device? This takes longer than a service restart.')) return;
+        const status = document.getElementById('restart-status');
+        status.textContent = 'Rebooting\\u2026';
+        try {{
+          const resp = await fetch('/api/device/reboot', {{ method: 'POST' }});
+          const data = await resp.json();
+          status.textContent = data.ok ? 'Rebooting now.' : ('Failed: ' + data.message);
+        }} catch (e) {{
+          status.textContent = 'Request failed.';
+        }}
+      }});
+    </script>"""
+    return _page("carma — settings", "settings", body)
 
 
 _FORMAT_CLASS = {"KZ": "kz", "RU": "ru"}

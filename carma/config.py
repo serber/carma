@@ -9,6 +9,8 @@ import yaml
 from fast_plate_ocr.inference.hub import AVAILABLE_ONNX_MODELS as OCR_MODELS
 from open_image_models.detection.core.hub import DETECTION_MODELS
 
+from carma.settings import VALID_COLOR_MODES
+
 VALID_CAMERA_BACKENDS = {"picamera2", "opencv"}
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
@@ -28,6 +30,12 @@ class CameraConfig:
     device: int | str = 0        # opencv backend only: V4L2 index or /dev/videoN
     resolution: tuple[int, int] = (1280, 720)
     framerate: int = 30
+    # color (default) | grayscale. Just the starting value -- adjustable
+    # live from the dashboard's Settings page without a restart, and once
+    # changed there it's persisted to data/runtime_settings.json, which
+    # then wins over this value on every future startup. See
+    # carma/settings.py.
+    color_mode: str = "color"
 
 
 @dataclasses.dataclass
@@ -44,6 +52,15 @@ class DetectionConfig:
     # file for a custom-trained model.
     model_name: str = "yolo-v9-t-384-license-plate-end2end"
     confidence_threshold: float = 0.4
+    # Skip running detection/OCR on a motion frame if less than this many
+    # milliseconds have passed since the last detection pass -- caps how
+    # often the expensive models run during heavy, continuous motion (busy
+    # traffic), trading a little detection latency for lower sustained
+    # CPU load and heat. 0 (default) means no throttling: detect on every
+    # motion frame, same as before this setting existed. Just the starting
+    # value -- adjustable live from the dashboard's Settings page without a
+    # restart; see carma/settings.py.
+    min_interval_ms: int = 0
 
 
 @dataclasses.dataclass
@@ -159,6 +176,11 @@ def load_config(path: str | Path) -> Config:
     camera.resolution = (int(camera.resolution[0]), int(camera.resolution[1]))
     if camera.framerate <= 0:
         raise ConfigError(f"{path}: camera.framerate must be > 0")
+    if camera.color_mode not in VALID_COLOR_MODES:
+        raise ConfigError(
+            f"{path}: camera.color_mode must be one of "
+            f"{sorted(VALID_COLOR_MODES)}, got {camera.color_mode!r}"
+        )
 
     if motion.roi is not None:
         if len(motion.roi) != 4:
@@ -168,6 +190,9 @@ def load_config(path: str | Path) -> Config:
         raise ConfigError(f"{path}: motion.threshold must be >= 0")
     if motion.min_area < 0:
         raise ConfigError(f"{path}: motion.min_area must be >= 0")
+
+    if detection.min_interval_ms < 0:
+        raise ConfigError(f"{path}: detection.min_interval_ms must be >= 0")
 
     if not (0.0 <= detection.confidence_threshold <= 1.0):
         raise ConfigError(
