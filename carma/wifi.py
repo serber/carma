@@ -82,7 +82,10 @@ def get_status(iface: str = _IFACE) -> WifiStatus:
         return WifiStatus(mode="unavailable", ssid=None, ip_address=None)
     try:
         result = _run(
-            ["nmcli", "-t", "-f", "GENERAL.CONNECTION,GENERAL.STATE,IP4.ADDRESS[1]",
+            # -f only accepts the base field name -- nmcli rejects the
+            # indexed "IP4.ADDRESS[1]" here even though that's the key it
+            # prints for that field in the output below.
+            ["nmcli", "-t", "-f", "GENERAL.CONNECTION,GENERAL.STATE,IP4.ADDRESS",
              "device", "show", iface],
             _STATUS_TIMEOUT,
         )
