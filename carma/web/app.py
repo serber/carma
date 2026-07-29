@@ -293,13 +293,14 @@ _STYLE = """
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .settings-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .settings-row label { flex: 0 0 auto; min-width: 92px; }
     .settings-row input[type="range"] { accent-color: var(--accent); flex: 1 1 160px; }
     .settings-row output { font-variant-numeric: tabular-nums; min-width: 3.5em; }
-    .settings-row button {
+    .primary-button {
       background: var(--accent); color: #fff; border: none; border-radius: 6px;
       padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
     }
-    .settings-row button:hover { opacity: 0.9; }
+    .primary-button:hover { opacity: 0.9; }
     .settings-row .saved { color: var(--good); font-size: 13px; opacity: 0; transition: opacity 0.2s; }
     .settings-row .saved.show { opacity: 1; }
     .hint { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
@@ -323,11 +324,20 @@ _STYLE = """
     }
     .secondary-button:hover { opacity: 0.9; }
     .mode-button {
-      background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
-      border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+      background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 14px 6px 30px; font-size: 13px; font-weight: 600; cursor: pointer;
+      position: relative;
     }
     .mode-button:hover { opacity: 0.9; }
-    .mode-button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .mode-button::before {
+      content: ""; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+      width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--text-muted);
+      background: transparent;
+    }
+    .mode-button.active {
+      background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700;
+    }
+    .mode-button.active::before { background: #fff; border-color: #fff; }
     .network-row {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; cursor: pointer;
@@ -511,7 +521,7 @@ def _wifi_fragment(nmcli_available: bool) -> str:
       <div class="settings-row">
         <label for="wifi-password">Password</label>
         <input type="password" id="wifi-password" maxlength="63" placeholder="leave blank for open networks">
-        <button id="wifi-connect" type="button">Connect</button>
+        <button id="wifi-connect" type="button" class="primary-button">Connect</button>
       </div>
       <p class="hint" id="wifi-connect-status">&nbsp;</p>
       <p class="hint">
@@ -672,7 +682,7 @@ def _render_settings(nmcli_available: bool, min_confidence: float, color_mode: s
         <label for="min-confidence">Minimum confidence to store a hit</label>
         <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
         <output id="min-confidence-value">{min_confidence:.2f}</output>
-        <button id="save-confidence" type="button">Save</button>
+        <button id="save-confidence" type="button" class="primary-button">Save</button>
         <span class="saved" id="confidence-saved">Saved</span>
       </div>
       <p class="hint">
