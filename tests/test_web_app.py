@@ -245,3 +245,47 @@ def test_mjpeg_generator_prefers_latest_frame():
     gen = _mjpeg_generator(FixedFrameLoop(), b"placeholder")
     chunk = next(gen)
     assert b"real-jpeg-bytes" in chunk
+
+
+def test_wifi_page_renders_without_nmcli(monkeypatch):
+    # Dev/CI machines don't have nmcli -- the page must still render, with
+    # a hint that Wi-Fi management isn't available here, not crash.
+    from carma import wifi
+    monkeypatch.setattr(wifi, "available", lambda: False)
+    client = _client()
+    resp = client.get("/wifi")
+    assert resp.status_code == 200
+    assert "nmcli was not found" in resp.text
+
+
+def test_wifi_status_endpoint_reports_unavailable_without_nmcli(monkeypatch):
+    from carma import wifi
+    monkeypatch.setattr(wifi, "available", lambda: False)
+    client = _client()
+    resp = client.get("/api/wifi/status")
+    assert resp.status_code == 200
+    assert resp.json()["mode"] == "unavailable"
+
+
+def test_wifi_networks_endpoint_returns_empty_list_without_nmcli(monkeypatch):
+    from carma import wifi
+    monkeypatch.setattr(wifi, "available", lambda: False)
+    client = _client()
+    resp = client.get("/api/wifi/networks")
+    assert resp.status_code == 200
+    assert resp.json() == {"networks": []}
+
+
+def test_wifi_connect_endpoint_reports_failure_without_nmcli(monkeypatch):
+    from carma import wifi
+    monkeypatch.setattr(wifi, "available", lambda: False)
+    client = _client()
+    resp = client.post("/api/wifi/connect", json={"ssid": "HomeWifi", "password": "hunter22"})
+    assert resp.status_code == 502
+    assert resp.json()["ok"] is False
+
+
+def test_wifi_connect_endpoint_rejects_empty_ssid():
+    client = _client()
+    resp = client.post("/api/wifi/connect", json={"ssid": "", "password": ""})
+    assert resp.status_code == 422  # Pydantic min_length=1

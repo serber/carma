@@ -67,6 +67,15 @@ cp "$INSTALL_DIR/systemd/carma-ap-fallback.service" /etc/systemd/system/carma-ap
 systemctl daemon-reload
 systemctl enable carma carma-ap-fallback
 
+echo "==> installing Wi-Fi settings helper (lets the dashboard join a new network)"
+chmod +x "$INSTALL_DIR/scripts/carma-wifi.sh"
+install -m 0440 "$INSTALL_DIR/systemd/carma-wifi.sudoers" /etc/sudoers.d/carma-wifi
+if ! visudo -c -f /etc/sudoers.d/carma-wifi >/dev/null; then
+    echo "error: generated /etc/sudoers.d/carma-wifi failed validation, removing it" >&2
+    rm -f /etc/sudoers.d/carma-wifi
+    exit 1
+fi
+
 cat <<MSG
 ==> done.
     - review $INSTALL_DIR/config.yaml (camera backend/resolution, dashboard port)

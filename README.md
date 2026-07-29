@@ -126,7 +126,10 @@ happen does it bring up `carma-ap`. This means the device keeps using your
 regular Wi-Fi whenever it's in range, and only serves its own hotspot when
 it can't reach a known network -- no need to flip `autoconnect` by hand,
 and no risk of the AP profile fighting your home Wi-Fi profile for
-activation on every boot.
+activation on every boot. If `carma-ap` was still active from a previous
+boot (e.g. no known network was in range last time), the script drops it
+before checking, so a network that's become reachable since then always
+gets a fair shot instead of the device staying stuck on the hotspot.
 
 Leave `carma-ap` at `autoconnect no` (the default from step 1) -- the
 fallback service is what brings it up, not NetworkManager's own
@@ -136,6 +139,15 @@ autoconnect logic. Check it with:
 systemctl status carma-ap-fallback
 journalctl -u carma-ap-fallback -b
 ```
+
+**5. Joining a network from the dashboard.** Once you're on `carma-ap`
+(or already on a normal network reaching the device), open the **Wi-Fi**
+tab in the dashboard to scan for and join a network without SSH -- handy
+after moving the device to a new location. It's backed by
+`scripts/carma-wifi.sh`, a small root-only helper `install.sh` wires up
+via a sudoers rule scoped to that one script (`carma-svc`, the service
+user, otherwise has no elevated access at all). The manual `nmcli`
+commands above still work too, e.g. for scripting a fleet rollout.
 
 ## Development (off-Pi)
 

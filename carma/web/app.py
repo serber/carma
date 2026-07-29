@@ -3,6 +3,7 @@
 # at http://192.168.4.1:8000 over the Pi's own AP (see README).
 from __future__ import annotations
 
+import dataclasses
 import html
 import logging
 import time
@@ -20,6 +21,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from carma import wifi
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
@@ -33,6 +35,15 @@ logger = logging.getLogger(__name__)
 
 class SettingsUpdate(BaseModel):
     min_confidence: float = Field(ge=0.0, le=1.0)
+
+
+class WifiConnectRequest(BaseModel):
+    ssid: str = Field(min_length=1, max_length=32)
+    password: str = Field(default="", max_length=63)
+
+
+class WifiForgetRequest(BaseModel):
+    ssid: str = Field(min_length=1, max_length=32)
 
 
 MJPEG_BOUNDARY = "frame"
@@ -103,6 +114,34 @@ def create_app(
         clear_images(images_dir)
         logger.warning("cleared %d hit(s) and their images via dashboard", count)
         return JSONResponse({"cleared": count})
+
+    @app.get("/wifi", response_class=HTMLResponse)
+    def wifi_page() -> str:
+        return _render_wifi(wifi.available())
+
+    @app.get("/api/wifi/status")
+    def wifi_status() -> JSONResponse:
+        return JSONResponse(dataclasses.asdict(wifi.get_status()))
+
+    @app.get("/api/wifi/networks")
+    def wifi_networks() -> JSONResponse:
+        return JSONResponse({"networks": [dataclasses.asdict(n) for n in wifi.scan_networks()]})
+
+    @app.get("/api/wifi/saved")
+    def wifi_saved() -> JSONResponse:
+        return JSONResponse({"profiles": [dataclasses.asdict(p) for p in wifi.list_saved_profiles()]})
+
+    @app.post("/api/wifi/connect")
+    def wifi_connect(body: WifiConnectRequest) -> JSONResponse:
+        ok, message = wifi.connect(body.ssid, body.password)
+        logger.info("wifi connect to %r via dashboard: %s", body.ssid, "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
+
+    @app.post("/api/wifi/forget")
+    def wifi_forget(body: WifiForgetRequest) -> JSONResponse:
+        ok, message = wifi.forget(body.ssid)
+        logger.info("wifi forget of %r via dashboard: %s", body.ssid, "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
 
     return app
 
@@ -254,6 +293,23 @@ _STYLE = """
       padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
     }
     .danger-button:hover { opacity: 0.9; }
+    .secondary-button {
+      background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .secondary-button:hover { opacity: 0.9; }
+    .network-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; cursor: pointer;
+    }
+    .network-row:last-child { border-bottom: none; }
+    .network-row:hover { background: var(--surface-2); }
+    .network-row.static { cursor: default; }
+    .network-row.static:hover { background: none; }
+    .settings-row input[type="text"], .settings-row input[type="password"] {
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); padding: 6px 10px; font-size: 14px; flex: 1 1 200px;
+    }
 """
 
 
@@ -262,7 +318,11 @@ def _page(title: str, active: str, body: str) -> str:
         css_class = ' class="active"' if key == active else ""
         return f'<a href="{href}"{css_class}>{label}</a>'
 
-    nav = nav_link("/", "Live", "live") + nav_link("/hits", "Hits", "hits")
+    nav = (
+        nav_link("/", "Live", "live")
+        + nav_link("/hits", "Hits", "hits")
+        + nav_link("/wifi", "Wi-Fi", "wifi")
+    )
     return f"""<!doctype html>
 <html>
 <head>
@@ -416,6 +476,178 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       poll();
     </script>"""
     return _page("carma", "live", body)
+
+
+def _render_wifi(nmcli_available: bool) -> str:
+    unavailable_hint = (
+        ""
+        if nmcli_available
+        else '<p class="hint">nmcli was not found -- Wi-Fi management only works on the Pi itself.</p>'
+    )
+    body = f"""
+    <div class="card">
+      <h2>Current connection</h2>
+      <div class="badges">
+        <span class="badge" id="wifi-mode-badge"><span class="dot"></span><span id="wifi-mode-text">loading&hellip;</span></span>
+      </div>
+      <p class="hint" id="wifi-detail">&nbsp;</p>
+      {unavailable_hint}
+    </div>
+    <div class="card">
+      <h2>Available networks</h2>
+      <p class="hint" id="scan-hint">Scanning&hellip;</p>
+      <div id="network-list"></div>
+      <p style="margin: 12px 0 0;"><button id="rescan" type="button" class="secondary-button">Rescan</button></p>
+    </div>
+    <div class="card">
+      <h2>Connect to a network</h2>
+      <div class="settings-row">
+        <label for="wifi-ssid">SSID</label>
+        <input type="text" id="wifi-ssid" maxlength="32" placeholder="Network name">
+      </div>
+      <div class="settings-row">
+        <label for="wifi-password">Password</label>
+        <input type="password" id="wifi-password" maxlength="63" placeholder="leave blank for open networks">
+        <button id="wifi-connect" type="button">Connect</button>
+      </div>
+      <p class="hint" id="wifi-connect-status">&nbsp;</p>
+      <p class="hint">
+        Connecting switches wlan0 off the carma hotspot -- if you're on the
+        "carma" Wi-Fi right now, this device will drop off it. It's
+        reachable again at the new network's IP, or back on carma-ap if
+        the connection fails.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Saved networks</h2>
+      <div id="saved-list" class="hint">loading&hellip;</div>
+    </div>
+    <script>
+      function escapeHtml(s) {{
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+      }}
+
+      async function loadWifiStatus() {{
+        const badge = document.getElementById('wifi-mode-badge');
+        const modeText = document.getElementById('wifi-mode-text');
+        const detail = document.getElementById('wifi-detail');
+        const labels = {{
+          client: 'Connected', ap: 'Hotspot (carma-ap)',
+          disconnected: 'Disconnected', unavailable: 'Unavailable',
+        }};
+        try {{
+          const data = await (await fetch('/api/wifi/status')).json();
+          modeText.textContent = labels[data.mode] || data.mode;
+          badge.className = 'badge' + (data.mode === 'client' ? '' : ' fail');
+          if (data.mode === 'client') {{
+            detail.textContent = (data.ssid || '') + ' \\u2014 ' + (data.ip_address || 'no IP yet');
+          }} else if (data.mode === 'ap') {{
+            detail.textContent = 'Serving its own hotspot -- no known network in range.';
+          }} else {{
+            detail.textContent = '';
+          }}
+        }} catch (e) {{
+          modeText.textContent = 'error';
+        }}
+      }}
+
+      async function loadNetworks() {{
+        const list = document.getElementById('network-list');
+        const hint = document.getElementById('scan-hint');
+        hint.textContent = 'Scanning\\u2026';
+        try {{
+          const data = await (await fetch('/api/wifi/networks')).json();
+          list.innerHTML = '';
+          if (data.networks.length === 0) {{
+            hint.textContent = 'No networks found.';
+            return;
+          }}
+          hint.textContent = '';
+          for (const net of data.networks) {{
+            const row = document.createElement('div');
+            row.className = 'network-row';
+            row.innerHTML =
+              '<span>' + (net.in_use ? '&#9679; ' : '') + escapeHtml(net.ssid) + '</span>' +
+              '<span class="hint">' + (net.secured ? '&#128274;' : 'open') + ' ' + net.signal + '%</span>';
+            row.addEventListener('click', () => {{
+              document.getElementById('wifi-ssid').value = net.ssid;
+              document.getElementById('wifi-password').focus();
+            }});
+            list.appendChild(row);
+          }}
+        }} catch (e) {{
+          hint.textContent = 'Scan failed.';
+        }}
+      }}
+
+      async function loadSaved() {{
+        const list = document.getElementById('saved-list');
+        try {{
+          const data = await (await fetch('/api/wifi/saved')).json();
+          if (data.profiles.length === 0) {{
+            list.textContent = 'No saved networks yet.';
+            return;
+          }}
+          list.innerHTML = '';
+          for (const p of data.profiles) {{
+            const row = document.createElement('div');
+            row.className = 'network-row static';
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = p.name;
+            const btn = document.createElement('button');
+            btn.textContent = 'Forget';
+            btn.type = 'button';
+            btn.className = 'danger-button';
+            btn.addEventListener('click', async (ev) => {{
+              ev.stopPropagation();
+              if (!confirm('Forget "' + p.name + '"?')) return;
+              await fetch('/api/wifi/forget', {{
+                method: 'POST', headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ssid: p.name}}),
+              }});
+              loadSaved();
+            }});
+            row.appendChild(nameSpan);
+            row.appendChild(btn);
+            list.appendChild(row);
+          }}
+        }} catch (e) {{
+          list.textContent = 'Failed to load.';
+        }}
+      }}
+
+      document.getElementById('rescan').addEventListener('click', loadNetworks);
+
+      document.getElementById('wifi-connect').addEventListener('click', async () => {{
+        const ssid = document.getElementById('wifi-ssid').value.trim();
+        const password = document.getElementById('wifi-password').value;
+        const status = document.getElementById('wifi-connect-status');
+        if (!ssid) {{ status.textContent = 'Enter an SSID.'; return; }}
+        status.textContent = 'Connecting\\u2026';
+        try {{
+          const resp = await fetch('/api/wifi/connect', {{
+            method: 'POST', headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{ssid, password}}),
+          }});
+          const data = await resp.json();
+          status.textContent = data.ok ? 'Connected.' : ('Failed: ' + data.message);
+          if (data.ok) {{
+            document.getElementById('wifi-password').value = '';
+            loadWifiStatus();
+            loadSaved();
+          }}
+        }} catch (e) {{
+          status.textContent = 'Request failed.';
+        }}
+      }});
+
+      loadWifiStatus();
+      loadNetworks();
+      loadSaved();
+    </script>"""
+    return _page("carma — wifi", "wifi", body)
 
 
 _FORMAT_CLASS = {"KZ": "kz", "RU": "ru"}
