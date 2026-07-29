@@ -1,11 +1,15 @@
 # Copy to config.yaml and adjust. Paths are relative to the working
-# directory carma is started from (see systemd/carma.service).
+# directory carma is started from (see systemd/carma-app.service).
 
 camera:
   backend: picamera2   # picamera2 (CSI, default) | opencv (USB)
   device: 0             # opencv backend only: V4L2 index or /dev/videoN
   resolution: [1280, 720]
   framerate: 30
+  # color (default) | grayscale. Adjustable live from the dashboard's
+  # Settings page without a restart; see storage.min_confidence below for
+  # how that persistence works.
+  color_mode: color
 
 motion:
   threshold: 25          # frame-diff sensitivity; lower = more sensitive

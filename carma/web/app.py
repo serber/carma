@@ -8,6 +8,7 @@ import html
 import logging
 import time
 from pathlib import Path
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -21,7 +22,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from carma import wifi
+from carma import device, wifi
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
@@ -34,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsUpdate(BaseModel):
-    min_confidence: float = Field(ge=0.0, le=1.0)
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    color_mode: Literal["color", "grayscale"] | None = None
 
 
 class WifiConnectRequest(BaseModel):
@@ -65,17 +67,27 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _render_index(self_check, settings.min_confidence)
+        return _render_index(self_check)
 
     @app.get("/api/settings")
     def get_settings() -> JSONResponse:
-        return JSONResponse({"min_confidence": settings.min_confidence})
+        return JSONResponse({
+            "min_confidence": settings.min_confidence,
+            "color_mode": settings.color_mode,
+        })
 
     @app.post("/api/settings")
     def update_settings(body: SettingsUpdate) -> JSONResponse:
-        settings.min_confidence = body.min_confidence
-        logger.info("min_confidence set to %.2f via dashboard", body.min_confidence)
-        return JSONResponse({"min_confidence": settings.min_confidence})
+        if body.min_confidence is not None:
+            settings.min_confidence = body.min_confidence
+            logger.info("min_confidence set to %.2f via dashboard", body.min_confidence)
+        if body.color_mode is not None:
+            settings.color_mode = body.color_mode
+            logger.info("color_mode set to %s via dashboard", body.color_mode)
+        return JSONResponse({
+            "min_confidence": settings.min_confidence,
+            "color_mode": settings.color_mode,
+        })
 
     @app.get("/api/status")
     def status() -> JSONResponse:
@@ -115,9 +127,21 @@ def create_app(
         logger.warning("cleared %d hit(s) and their images via dashboard", count)
         return JSONResponse({"cleared": count})
 
-    @app.get("/wifi", response_class=HTMLResponse)
-    def wifi_page() -> str:
-        return _render_wifi(wifi.available())
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page() -> str:
+        return _render_settings(wifi.available(), settings.min_confidence, settings.color_mode)
+
+    @app.post("/api/device/restart-service")
+    def restart_service() -> JSONResponse:
+        ok, message = device.restart_service()
+        logger.warning("service restart requested via dashboard: %s", "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
+
+    @app.post("/api/device/reboot")
+    def reboot_device() -> JSONResponse:
+        ok, message = device.reboot_device()
+        logger.warning("device reboot requested via dashboard: %s", "ok" if ok else message)
+        return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 502)
 
     @app.get("/api/wifi/status")
     def wifi_status() -> JSONResponse:
@@ -298,6 +322,12 @@ _STYLE = """
       border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
     }
     .secondary-button:hover { opacity: 0.9; }
+    .mode-button {
+      background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .mode-button:hover { opacity: 0.9; }
+    .mode-button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .network-row {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; cursor: pointer;
@@ -321,7 +351,7 @@ def _page(title: str, active: str, body: str) -> str:
     nav = (
         nav_link("/", "Live", "live")
         + nav_link("/hits", "Hits", "hits")
-        + nav_link("/wifi", "Wi-Fi", "wifi")
+        + nav_link("/settings", "Settings", "settings")
     )
     return f"""<!doctype html>
 <html>
@@ -343,7 +373,7 @@ def _page(title: str, active: str, body: str) -> str:
 </html>"""
 
 
-def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
+def _render_index(self_check: dict[str, bool]) -> str:
     badges = "".join(
         f'<span class="badge{"" if ok else " fail"}">'
         f'<span class="dot"></span>{html.escape(name)}: {"OK" if ok else "FAILED"}'
@@ -367,18 +397,6 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       <div class="disk-track"><div class="disk-fill" id="disk-fill"></div></div>
       <p class="disk-label" id="disk-label">loading&hellip;</p>
       <p class="disk-label" id="images-label">loading&hellip;</p>
-      <div class="settings-row">
-        <label for="min-confidence">Minimum confidence to store a hit</label>
-        <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
-        <output id="min-confidence-value">{min_confidence:.2f}</output>
-        <button id="save-settings" type="button">Save</button>
-        <span class="saved" id="settings-saved">Saved</span>
-      </div>
-      <p class="hint">
-        Reads below this confidence still show live on the preview and count
-        toward OCR reads -- they just aren't written to <a href="/hits">Hits</a>.
-        0 stores everything. Saved value survives a restart.
-      </p>
     </div>
     <div class="card">
       <h2>Counters</h2>
@@ -396,22 +414,6 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
       <div id="log">loading&hellip;</div>
     </div>
     <script>
-      const minConfidenceInput = document.getElementById('min-confidence');
-      const minConfidenceValue = document.getElementById('min-confidence-value');
-      minConfidenceInput.addEventListener('input', () => {{
-        minConfidenceValue.textContent = parseFloat(minConfidenceInput.value).toFixed(2);
-      }});
-      document.getElementById('save-settings').addEventListener('click', async () => {{
-        await fetch('/api/settings', {{
-          method: 'POST',
-          headers: {{'Content-Type': 'application/json'}},
-          body: JSON.stringify({{min_confidence: parseFloat(minConfidenceInput.value)}}),
-        }});
-        const saved = document.getElementById('settings-saved');
-        saved.classList.add('show');
-        setTimeout(() => saved.classList.remove('show'), 1500);
-      }});
-
       function tempClass(t) {{
         if (t === null || t === undefined) return '';
         if (t >= 80) return 'critical';
@@ -478,13 +480,14 @@ def _render_index(self_check: dict[str, bool], min_confidence: float) -> str:
     return _page("carma", "live", body)
 
 
-def _render_wifi(nmcli_available: bool) -> str:
+def _wifi_fragment(nmcli_available: bool) -> str:
+    """Wi-Fi status/scan/connect/saved cards, embedded in the Settings page."""
     unavailable_hint = (
         ""
         if nmcli_available
         else '<p class="hint">nmcli was not found -- Wi-Fi management only works on the Pi itself.</p>'
     )
-    body = f"""
+    return f"""
     <div class="card">
       <h2>Current connection</h2>
       <div class="badges">
@@ -647,7 +650,111 @@ def _render_wifi(nmcli_available: bool) -> str:
       loadNetworks();
       loadSaved();
     </script>"""
-    return _page("carma — wifi", "wifi", body)
+
+
+def _render_settings(nmcli_available: bool, min_confidence: float, color_mode: str) -> str:
+    body = f"""
+    <div class="card">
+      <h2>Camera</h2>
+      <div class="settings-row">
+        <span>Color mode</span>
+        <button type="button" class="mode-button" id="mode-color" data-mode="color">Color</button>
+        <button type="button" class="mode-button" id="mode-grayscale" data-mode="grayscale">Black &amp; white</button>
+      </div>
+      <p class="hint">
+        Applies to the live preview, detection/OCR, and stored hit images.
+        Takes effect on the next captured frame -- no restart needed.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Detection</h2>
+      <div class="settings-row">
+        <label for="min-confidence">Minimum confidence to store a hit</label>
+        <input type="range" id="min-confidence" min="0" max="1" step="0.05" value="{min_confidence}">
+        <output id="min-confidence-value">{min_confidence:.2f}</output>
+        <button id="save-confidence" type="button">Save</button>
+        <span class="saved" id="confidence-saved">Saved</span>
+      </div>
+      <p class="hint">
+        Reads below this confidence still show live on the preview and count
+        toward OCR reads -- they just aren't written to <a href="/hits">Hits</a>.
+        0 stores everything. Saved value survives a restart.
+      </p>
+    </div>
+    {_wifi_fragment(nmcli_available)}
+    <div class="card">
+      <h2>Restart</h2>
+      <div class="settings-row">
+        <button id="restart-service" type="button" class="secondary-button">Restart carma-app service</button>
+        <button id="reboot-device" type="button" class="danger-button">Reboot device</button>
+      </div>
+      <p class="hint" id="restart-status">&nbsp;</p>
+      <p class="hint">
+        Restarting the service takes a few seconds and briefly drops the
+        live preview. Rebooting takes longer, and also drops Wi-Fi if
+        you're connected to carma-ap right now.
+      </p>
+    </div>
+    <script>
+      const modeButtons = document.querySelectorAll('.mode-button');
+      function setActiveMode(mode) {{
+        modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
+      }}
+      setActiveMode('{color_mode}');
+      modeButtons.forEach(btn => {{
+        btn.addEventListener('click', async () => {{
+          await fetch('/api/settings', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{color_mode: btn.dataset.mode}}),
+          }});
+          setActiveMode(btn.dataset.mode);
+        }});
+      }});
+
+      const minConfidenceInput = document.getElementById('min-confidence');
+      const minConfidenceValue = document.getElementById('min-confidence-value');
+      minConfidenceInput.addEventListener('input', () => {{
+        minConfidenceValue.textContent = parseFloat(minConfidenceInput.value).toFixed(2);
+      }});
+      document.getElementById('save-confidence').addEventListener('click', async () => {{
+        await fetch('/api/settings', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{min_confidence: parseFloat(minConfidenceInput.value)}}),
+        }});
+        const saved = document.getElementById('confidence-saved');
+        saved.classList.add('show');
+        setTimeout(() => saved.classList.remove('show'), 1500);
+      }});
+
+      document.getElementById('restart-service').addEventListener('click', async () => {{
+        if (!confirm('Restart the carma-app service? The live preview drops for a few seconds.')) return;
+        const status = document.getElementById('restart-status');
+        status.textContent = 'Restarting\\u2026';
+        try {{
+          const resp = await fetch('/api/device/restart-service', {{ method: 'POST' }});
+          const data = await resp.json();
+          status.textContent = data.ok ? 'Restarting now.' : ('Failed: ' + data.message);
+        }} catch (e) {{
+          status.textContent = 'Request failed.';
+        }}
+      }});
+
+      document.getElementById('reboot-device').addEventListener('click', async () => {{
+        if (!confirm('Reboot the whole device? This takes longer than a service restart.')) return;
+        const status = document.getElementById('restart-status');
+        status.textContent = 'Rebooting\\u2026';
+        try {{
+          const resp = await fetch('/api/device/reboot', {{ method: 'POST' }});
+          const data = await resp.json();
+          status.textContent = data.ok ? 'Rebooting now.' : ('Failed: ' + data.message);
+        }} catch (e) {{
+          status.textContent = 'Request failed.';
+        }}
+      }});
+    </script>"""
+    return _page("carma — settings", "settings", body)
 
 
 _FORMAT_CLASS = {"KZ": "kz", "RU": "ru"}

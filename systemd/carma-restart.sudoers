@@ -1,0 +1,7 @@
+# Lets carma-svc (the unprivileged service user, see carma-app.service) run
+# exactly one script as root: the restart/reboot helper behind the
+# dashboard's Settings page. Nothing else -- carma-svc still can't run
+# systemctl or anything else as root. Installed to
+# /etc/sudoers.d/carma-restart by scripts/install.sh (validated with
+# visudo -c first).
+carma-svc ALL=(root) NOPASSWD: /opt/carma-app/scripts/carma-restart.sh

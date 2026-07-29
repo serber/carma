@@ -17,31 +17,52 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+VALID_COLOR_MODES = {"color", "grayscale"}
+
 
 class RuntimeSettings:
-    def __init__(self, min_confidence: float, persist_path: str | None = None) -> None:
+    def __init__(
+        self, min_confidence: float, color_mode: str = "color", persist_path: str | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._persist_path = Path(persist_path) if persist_path else None
-        self._min_confidence = self._load_persisted(default=min_confidence)
+        persisted = self._load_persisted()
+        self._min_confidence = persisted.get("min_confidence", min_confidence)
+        self._color_mode = persisted.get("color_mode", color_mode)
 
-    def _load_persisted(self, default: float) -> float:
+    def _load_persisted(self) -> dict:
         if self._persist_path is None or not self._persist_path.is_file():
-            return default
+            return {}
         try:
-            value = float(json.loads(self._persist_path.read_text())["min_confidence"])
-        except (OSError, ValueError, KeyError, TypeError) as e:
+            raw = json.loads(self._persist_path.read_text())
+        except (OSError, ValueError) as e:
             logger.warning(
-                "failed to load persisted settings from %s (%s); using config default",
+                "failed to load persisted settings from %s (%s); using config defaults",
                 self._persist_path, e,
             )
-            return default
-        if not (0.0 <= value <= 1.0):
-            logger.warning(
-                "persisted min_confidence=%r out of range; using config default", value
-            )
-            return default
-        logger.info("loaded persisted min_confidence=%.2f from %s", value, self._persist_path)
-        return value
+            return {}
+
+        result: dict = {}
+        if "min_confidence" in raw:
+            try:
+                value = float(raw["min_confidence"])
+            except (ValueError, TypeError):
+                logger.warning("persisted min_confidence=%r invalid; using config default", raw["min_confidence"])
+            else:
+                if 0.0 <= value <= 1.0:
+                    result["min_confidence"] = value
+                else:
+                    logger.warning("persisted min_confidence=%r out of range; using config default", value)
+        if "color_mode" in raw:
+            value = raw["color_mode"]
+            if value in VALID_COLOR_MODES:
+                result["color_mode"] = value
+            else:
+                logger.warning("persisted color_mode=%r invalid; using config default", value)
+
+        if result:
+            logger.info("loaded persisted settings %s from %s", result, self._persist_path)
+        return result
 
     @property
     def min_confidence(self) -> float:
@@ -56,11 +77,25 @@ class RuntimeSettings:
             self._min_confidence = value
         self._persist()
 
+    @property
+    def color_mode(self) -> str:
+        with self._lock:
+            return self._color_mode
+
+    @color_mode.setter
+    def color_mode(self, value: str) -> None:
+        if value not in VALID_COLOR_MODES:
+            raise ValueError(f"color_mode must be one of {sorted(VALID_COLOR_MODES)}")
+        with self._lock:
+            self._color_mode = value
+        self._persist()
+
     def _persist(self) -> None:
         if self._persist_path is None:
             return
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-            self._persist_path.write_text(json.dumps({"min_confidence": self._min_confidence}))
+            data = {"min_confidence": self._min_confidence, "color_mode": self._color_mode}
+            self._persist_path.write_text(json.dumps(data))
         except OSError:
             logger.exception("failed to persist settings to %s", self._persist_path)

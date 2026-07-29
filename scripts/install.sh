@@ -84,6 +84,15 @@ if ! visudo -c -f /etc/sudoers.d/carma-wifi >/dev/null; then
     exit 1
 fi
 
+echo "==> installing restart/reboot helper (lets the dashboard restart the service or the device)"
+chmod +x "$INSTALL_DIR/scripts/carma-restart.sh"
+install -m 0440 "$INSTALL_DIR/systemd/carma-restart.sudoers" /etc/sudoers.d/carma-restart
+if ! visudo -c -f /etc/sudoers.d/carma-restart >/dev/null; then
+    echo "error: generated /etc/sudoers.d/carma-restart failed validation, removing it" >&2
+    rm -f /etc/sudoers.d/carma-restart
+    exit 1
+fi
+
 if ! command -v nmcli >/dev/null 2>&1; then
     echo "==> nmcli not found, skipping $AP_CON_NAME hotspot setup (set it up manually later, see README.md)"
 elif nmcli -t -f NAME con show | grep -qx "$AP_CON_NAME"; then

@@ -362,6 +362,43 @@ def test_overlay_shows_plate_even_below_min_confidence(tmp_path):
     assert detections == [((1, 1, 4, 4, 0.9), "123ABC02")]
 
 
+def test_grayscale_color_mode_desaturates_captured_frames():
+    # a saturated blue frame should come out with equal B/G/R channels
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    frame[:, :] = (255, 0, 0)  # pure blue (BGR)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    loop = _make_loop(
+        source, counters, _quiet_motion(),
+        settings=RuntimeSettings(min_confidence=0.0, color_mode="grayscale"),
+    )
+
+    loop.start()
+    _wait_until(lambda: loop.latest_jpeg() is not None)
+    loop.stop()
+
+    decoded = _decode(loop.latest_jpeg())
+    pixel = decoded[4, 4]
+    # allow a little JPEG quantization noise -- channels should be near-equal
+    assert max(int(c) for c in pixel) - min(int(c) for c in pixel) <= 3
+
+
+def test_color_mode_leaves_frames_untouched_by_default():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    frame[:, :] = (255, 0, 0)  # pure blue (BGR)
+    source = FakeSource(frames=[frame])
+    counters = Counters()
+    loop = _make_loop(source, counters, _quiet_motion())
+
+    loop.start()
+    _wait_until(lambda: loop.latest_jpeg() is not None)
+    loop.stop()
+
+    decoded = _decode(loop.latest_jpeg())
+    pixel = decoded[4, 4]
+    assert int(pixel[0]) > int(pixel[1]) + 50  # still blue-dominant
+
+
 def test_low_confidence_read_does_not_block_dedup_for_later_good_read(tmp_path):
     # a below-threshold read must not consume the dedup slot, or a good
     # read of the same plate moments later would get wrongly suppressed

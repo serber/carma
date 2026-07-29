@@ -95,10 +95,19 @@ class CaptureLoop:
                 continue
             self._counters.increment("frames_captured")
             try:
+                frame = self._apply_color_mode(frame)
                 detections = self._process(frame)
                 self._encode(frame, detections)
             except Exception:
                 logger.exception("error processing frame; continuing")
+
+    def _apply_color_mode(self, frame: np.ndarray) -> np.ndarray:
+        if self._settings.color_mode != "grayscale":
+            return frame
+        # Desaturate but keep 3 channels -- detection/OCR/motion/storage all
+        # expect a BGR-shaped array, this just makes every channel equal.
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
     def _process(self, frame: np.ndarray) -> list[tuple[Box, str | None]]:
         if not self._motion_detector.update(frame):

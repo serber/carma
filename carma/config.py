@@ -9,6 +9,8 @@ import yaml
 from fast_plate_ocr.inference.hub import AVAILABLE_ONNX_MODELS as OCR_MODELS
 from open_image_models.detection.core.hub import DETECTION_MODELS
 
+from carma.settings import VALID_COLOR_MODES
+
 VALID_CAMERA_BACKENDS = {"picamera2", "opencv"}
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
@@ -28,6 +30,12 @@ class CameraConfig:
     device: int | str = 0        # opencv backend only: V4L2 index or /dev/videoN
     resolution: tuple[int, int] = (1280, 720)
     framerate: int = 30
+    # color (default) | grayscale. Just the starting value -- adjustable
+    # live from the dashboard's Settings page without a restart, and once
+    # changed there it's persisted to data/runtime_settings.json, which
+    # then wins over this value on every future startup. See
+    # carma/settings.py.
+    color_mode: str = "color"
 
 
 @dataclasses.dataclass
@@ -159,6 +167,11 @@ def load_config(path: str | Path) -> Config:
     camera.resolution = (int(camera.resolution[0]), int(camera.resolution[1]))
     if camera.framerate <= 0:
         raise ConfigError(f"{path}: camera.framerate must be > 0")
+    if camera.color_mode not in VALID_COLOR_MODES:
+        raise ConfigError(
+            f"{path}: camera.color_mode must be one of "
+            f"{sorted(VALID_COLOR_MODES)}, got {camera.color_mode!r}"
+        )
 
     if motion.roi is not None:
         if len(motion.roi) != 4:

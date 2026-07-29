@@ -67,3 +67,59 @@ def test_ignores_out_of_range_persisted_value(tmp_path):
     settings = RuntimeSettings(min_confidence=0.4, persist_path=str(persist_path))
 
     assert settings.min_confidence == 0.4  # falls back to config default
+
+
+def test_color_mode_reads_initial_value():
+    settings = RuntimeSettings(min_confidence=0.0, color_mode="grayscale")
+    assert settings.color_mode == "grayscale"
+
+
+def test_color_mode_defaults_to_color():
+    settings = RuntimeSettings(min_confidence=0.0)
+    assert settings.color_mode == "color"
+
+
+def test_color_mode_updates_value():
+    settings = RuntimeSettings(min_confidence=0.0)
+    settings.color_mode = "grayscale"
+    assert settings.color_mode == "grayscale"
+
+
+def test_color_mode_rejects_invalid_value():
+    settings = RuntimeSettings(min_confidence=0.0)
+    with pytest.raises(ValueError, match="color_mode must be one of"):
+        settings.color_mode = "sepia"
+    assert settings.color_mode == "color"  # unchanged
+
+
+def test_color_mode_persists_across_instances(tmp_path):
+    persist_path = tmp_path / "runtime_settings.json"
+
+    first = RuntimeSettings(min_confidence=0.0, persist_path=str(persist_path))
+    first.color_mode = "grayscale"
+
+    second = RuntimeSettings(min_confidence=0.0, persist_path=str(persist_path))
+    assert second.color_mode == "grayscale"
+
+
+def test_min_confidence_and_color_mode_persist_independently(tmp_path):
+    persist_path = tmp_path / "runtime_settings.json"
+
+    first = RuntimeSettings(min_confidence=0.0, persist_path=str(persist_path))
+    first.min_confidence = 0.6
+
+    second = RuntimeSettings(min_confidence=0.0, persist_path=str(persist_path))
+    second.color_mode = "grayscale"
+
+    third = RuntimeSettings(min_confidence=0.0, persist_path=str(persist_path))
+    assert third.min_confidence == 0.6
+    assert third.color_mode == "grayscale"
+
+
+def test_ignores_invalid_persisted_color_mode(tmp_path):
+    persist_path = tmp_path / "runtime_settings.json"
+    persist_path.write_text('{"color_mode": "sepia"}')
+
+    settings = RuntimeSettings(min_confidence=0.4, color_mode="color", persist_path=str(persist_path))
+
+    assert settings.color_mode == "color"  # falls back to config default

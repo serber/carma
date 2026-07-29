@@ -190,36 +190,56 @@ def test_clear_hits_endpoint_with_no_store():
     assert resp.json() == {"cleared": 0}
 
 
-def test_index_shows_current_min_confidence():
+def test_settings_page_shows_current_min_confidence():
     client = _client(settings=RuntimeSettings(min_confidence=0.65))
-    resp = client.get("/")
+    resp = client.get("/settings")
     assert resp.status_code == 200
     assert 'value="0.65"' in resp.text
     assert "0.65" in resp.text
 
 
-def test_get_settings_returns_current_value():
+def test_get_settings_returns_current_values():
     client = _client(settings=RuntimeSettings(min_confidence=0.3))
     resp = client.get("/api/settings")
     assert resp.status_code == 200
-    assert resp.json() == {"min_confidence": 0.3}
+    assert resp.json() == {"min_confidence": 0.3, "color_mode": "color"}
 
 
-def test_post_settings_updates_value():
+def test_post_settings_updates_min_confidence():
     settings = RuntimeSettings(min_confidence=0.0)
     client = _client(settings=settings)
 
     resp = client.post("/api/settings", json={"min_confidence": 0.75})
 
     assert resp.status_code == 200
-    assert resp.json() == {"min_confidence": 0.75}
+    assert resp.json() == {"min_confidence": 0.75, "color_mode": "color"}
     assert settings.min_confidence == 0.75
+
+
+def test_post_settings_updates_color_mode_only():
+    settings = RuntimeSettings(min_confidence=0.4)
+    client = _client(settings=settings)
+
+    resp = client.post("/api/settings", json={"color_mode": "grayscale"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"min_confidence": 0.4, "color_mode": "grayscale"}
+    assert settings.color_mode == "grayscale"
+    assert settings.min_confidence == 0.4  # untouched
 
 
 def test_post_settings_rejects_out_of_range_value():
     client = _client(settings=RuntimeSettings(min_confidence=0.2))
 
     resp = client.post("/api/settings", json={"min_confidence": 1.5})
+
+    assert resp.status_code == 422
+
+
+def test_post_settings_rejects_invalid_color_mode():
+    client = _client(settings=RuntimeSettings(min_confidence=0.2))
+
+    resp = client.post("/api/settings", json={"color_mode": "sepia"})
 
     assert resp.status_code == 422
 
@@ -247,13 +267,13 @@ def test_mjpeg_generator_prefers_latest_frame():
     assert b"real-jpeg-bytes" in chunk
 
 
-def test_wifi_page_renders_without_nmcli(monkeypatch):
+def test_settings_page_renders_without_nmcli(monkeypatch):
     # Dev/CI machines don't have nmcli -- the page must still render, with
     # a hint that Wi-Fi management isn't available here, not crash.
     from carma import wifi
     monkeypatch.setattr(wifi, "available", lambda: False)
     client = _client()
-    resp = client.get("/wifi")
+    resp = client.get("/settings")
     assert resp.status_code == 200
     assert "nmcli was not found" in resp.text
 
@@ -289,3 +309,37 @@ def test_wifi_connect_endpoint_rejects_empty_ssid():
     client = _client()
     resp = client.post("/api/wifi/connect", json={"ssid": "", "password": ""})
     assert resp.status_code == 422  # Pydantic min_length=1
+
+
+def test_settings_page_shows_active_color_mode():
+    client = _client(settings=RuntimeSettings(min_confidence=0.0, color_mode="grayscale"))
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    assert "setActiveMode('grayscale')" in resp.text
+
+
+def test_restart_service_endpoint_reports_failure_without_helper(monkeypatch):
+    from carma import device
+    monkeypatch.setattr(device, "restart_service", lambda: (False, "sudo: a password is required"))
+    client = _client()
+    resp = client.post("/api/device/restart-service")
+    assert resp.status_code == 502
+    assert resp.json()["ok"] is False
+
+
+def test_restart_service_endpoint_reports_success(monkeypatch):
+    from carma import device
+    monkeypatch.setattr(device, "restart_service", lambda: (True, "scheduled"))
+    client = _client()
+    resp = client.post("/api/device/restart-service")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "message": "scheduled"}
+
+
+def test_reboot_device_endpoint_reports_success(monkeypatch):
+    from carma import device
+    monkeypatch.setattr(device, "reboot_device", lambda: (True, "scheduled"))
+    client = _client()
+    resp = client.post("/api/device/reboot")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "message": "scheduled"}

@@ -48,7 +48,9 @@ def run(config_path: str) -> int:
     deduper = Deduper(config.dedup.window_seconds)
     watchlist = Watchlist(config.watchlist.enabled, config.watchlist.plates)
     settings_path = Path(config.storage.db_path).parent / "runtime_settings.json"
-    settings = RuntimeSettings(config.storage.min_confidence, persist_path=str(settings_path))
+    settings = RuntimeSettings(
+        config.storage.min_confidence, config.camera.color_mode, persist_path=str(settings_path)
+    )
 
     counters = Counters()
     capture_loop = CaptureLoop(

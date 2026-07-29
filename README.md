@@ -35,8 +35,8 @@ _Filled in as each piece lands — see build order in SPEC.md._
       enables the `carma-app` systemd unit, and sets up the `carma-ap`
       hotspot profile with a default SSID/password (`carma-ap` /
       `carmapwd` — override via `CARMA_AP_SSID`/`CARMA_AP_PASSWORD` env
-      vars before running, or change it later from the dashboard's Wi-Fi
-      tab / `nmcli`)
+      vars before running, or change it later from the dashboard's Settings
+      page / `nmcli`)
 - [ ] Power on. **While developing**, leave the Pi joined to your regular
       Wi-Fi and open `http://<pi-ip>:8000` (`dashboard.host: 0.0.0.0`
       already listens on every interface, no AP needed — find the IP via
@@ -107,7 +107,7 @@ boot while you're still developing) with SSID `carma-ap` and password
 sudo CARMA_AP_SSID=my-ssid CARMA_AP_PASSWORD='a-real-password' scripts/install.sh
 ```
 
-or change them later (dashboard's Wi-Fi tab, or by hand):
+or change them later (dashboard's Settings page, or by hand):
 
 ```sh
 sudo nmcli con modify carma-ap 802-11-wireless.ssid my-ssid
@@ -167,13 +167,34 @@ journalctl -u carma-ap-fallback -b
 ```
 
 **5. Joining a network from the dashboard.** Once you're on `carma-ap`
-(or already on a normal network reaching the device), open the **Wi-Fi**
-tab in the dashboard to scan for and join a network without SSH -- handy
+(or already on a normal network reaching the device), open **Settings**
+in the dashboard to scan for and join a network without SSH -- handy
 after moving the device to a new location. It's backed by
 `scripts/carma-wifi.sh`, a small root-only helper `install.sh` wires up
 via a sudoers rule scoped to that one script (`carma-svc`, the service
 user, otherwise has no elevated access at all). The manual `nmcli`
 commands above still work too, e.g. for scripting a fleet rollout.
+
+## Settings page
+
+The dashboard's **Settings** tab (`/settings`) is the one place for
+everything that isn't a build-time config: Wi-Fi (above), camera color
+mode, and restarting.
+
+- **Camera color mode** toggles between color and black & white. It
+  applies to the live preview, detection/OCR, and stored hit images alike
+  (see `carma/capture_loop.py`'s `_apply_color_mode`), takes effect on the
+  next captured frame, and survives a restart the same way
+  `storage.min_confidence` does (`camera.color_mode` in `config.yaml` is
+  just the starting value).
+- **Restart carma-app service** / **Reboot device** run
+  `scripts/carma-restart.sh` as root via another narrow sudoers rule
+  (`systemd/carma-restart.sudoers`). The helper schedules the actual
+  `systemctl restart`/`systemctl reboot` a second out with `systemd-run`
+  in a transient unit of its own, rather than running it inline -- inline
+  would kill the very process handling the dashboard's HTTP request (and
+  everything else in `carma-app.service`'s cgroup) before the browser ever
+  saw a response.
 
 ## Development (off-Pi)
 
