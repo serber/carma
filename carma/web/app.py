@@ -403,12 +403,6 @@ def _render_index(self_check: dict[str, bool]) -> str:
       </div>
     </div>
     <div class="card">
-      <h2>Storage</h2>
-      <div class="disk-track"><div class="disk-fill" id="disk-fill"></div></div>
-      <p class="disk-label" id="disk-label">loading&hellip;</p>
-      <p class="disk-label" id="images-label">loading&hellip;</p>
-    </div>
-    <div class="card">
       <h2>Counters</h2>
       <div class="stat-grid">
         <div class="stat-tile"><div class="value" id="stat-frames">&ndash;</div><div class="label">Frames captured</div></div>
@@ -418,6 +412,12 @@ def _render_index(self_check: dict[str, bool]) -> str:
         <div class="stat-tile"><div class="value" id="stat-fps">&ndash;</div><div class="label">FPS</div></div>
         <div class="stat-tile" id="tile-temp"><div class="value" id="stat-temp">&ndash;</div><div class="label">CPU temp</div></div>
       </div>
+    </div>
+    <div class="card">
+      <h2>Storage</h2>
+      <div class="disk-track"><div class="disk-fill" id="disk-fill"></div></div>
+      <p class="disk-label" id="disk-label">loading&hellip;</p>
+      <p class="disk-label" id="images-label">loading&hellip;</p>
     </div>
     <div class="card">
       <h2>Log tail</h2>
@@ -514,15 +514,15 @@ def _wifi_fragment(nmcli_available: bool) -> str:
     </div>
     <div class="card">
       <h2>Connect to a network</h2>
-      <div class="settings-row">
+      <div class="settings-row" style="margin-bottom: 10px;">
         <label for="wifi-ssid">SSID</label>
         <input type="text" id="wifi-ssid" maxlength="32" placeholder="Network name">
       </div>
       <div class="settings-row">
         <label for="wifi-password">Password</label>
         <input type="password" id="wifi-password" maxlength="63" placeholder="leave blank for open networks">
-        <button id="wifi-connect" type="button" class="primary-button">Connect</button>
       </div>
+      <p style="margin: 12px 0 0;"><button id="wifi-connect" type="button" class="primary-button">Connect</button></p>
       <p class="hint" id="wifi-connect-status">&nbsp;</p>
       <p class="hint">
         Connecting switches wlan0 off the carma hotspot -- if you're on the
