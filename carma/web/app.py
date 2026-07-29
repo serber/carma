@@ -26,7 +26,7 @@ from carma import device, wifi
 from carma.capture_loop import CaptureLoop
 from carma.counters import Counters
 from carma.logging_setup import get_recent_logs
-from carma.settings import RuntimeSettings
+from carma.settings import MAX_DETECT_INTERVAL_MS, RuntimeSettings
 from carma.storage.db import Hit, HitStore
 from carma.storage.images import clear_images, images_dir_size
 from carma.sysinfo import cpu_temperature_celsius, disk_usage
@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 class SettingsUpdate(BaseModel):
     min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     color_mode: Literal["color", "grayscale"] | None = None
+    detect_interval_ms: int | None = Field(default=None, ge=0, le=MAX_DETECT_INTERVAL_MS)
 
 
 class WifiConnectRequest(BaseModel):
@@ -74,6 +75,7 @@ def create_app(
         return JSONResponse({
             "min_confidence": settings.min_confidence,
             "color_mode": settings.color_mode,
+            "detect_interval_ms": settings.detect_interval_ms,
         })
 
     @app.post("/api/settings")
@@ -84,9 +86,13 @@ def create_app(
         if body.color_mode is not None:
             settings.color_mode = body.color_mode
             logger.info("color_mode set to %s via dashboard", body.color_mode)
+        if body.detect_interval_ms is not None:
+            settings.detect_interval_ms = body.detect_interval_ms
+            logger.info("detect_interval_ms set to %d via dashboard", body.detect_interval_ms)
         return JSONResponse({
             "min_confidence": settings.min_confidence,
             "color_mode": settings.color_mode,
+            "detect_interval_ms": settings.detect_interval_ms,
         })
 
     @app.get("/api/status")
@@ -129,7 +135,9 @@ def create_app(
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page() -> str:
-        return _render_settings(wifi.available(), settings.min_confidence, settings.color_mode)
+        return _render_settings(
+            wifi.available(), settings.min_confidence, settings.color_mode, settings.detect_interval_ms,
+        )
 
     @app.post("/api/device/restart-service")
     def restart_service() -> JSONResponse:
@@ -409,6 +417,7 @@ def _render_index(self_check: dict[str, bool]) -> str:
         <div class="stat-tile"><div class="value" id="stat-motion">&ndash;</div><div class="label">Motion events</div></div>
         <div class="stat-tile"><div class="value" id="stat-detections">&ndash;</div><div class="label">Detections</div></div>
         <div class="stat-tile"><div class="value" id="stat-ocr">&ndash;</div><div class="label">OCR reads</div></div>
+        <div class="stat-tile"><div class="value" id="stat-throttled">&ndash;</div><div class="label">Detections throttled</div></div>
         <div class="stat-tile"><div class="value" id="stat-fps">&ndash;</div><div class="label">FPS</div></div>
         <div class="stat-tile" id="tile-temp"><div class="value" id="stat-temp">&ndash;</div><div class="label">CPU temp</div></div>
       </div>
@@ -452,6 +461,7 @@ def _render_index(self_check: dict[str, bool]) -> str:
         document.getElementById('stat-motion').textContent = data.motion_events;
         document.getElementById('stat-detections').textContent = data.detections;
         document.getElementById('stat-ocr').textContent = data.ocr_reads;
+        document.getElementById('stat-throttled').textContent = data.detections_throttled;
         document.getElementById('stat-fps').textContent = data.fps;
         document.getElementById('stat-temp').textContent =
           data.cpu_temp_celsius === null ? 'n/a' : data.cpu_temp_celsius.toFixed(1) + '°C';
@@ -662,7 +672,15 @@ def _wifi_fragment(nmcli_available: bool) -> str:
     </script>"""
 
 
-def _render_settings(nmcli_available: bool, min_confidence: float, color_mode: str) -> str:
+def _detect_interval_label(ms: int) -> str:
+    if ms <= 0:
+        return "off"
+    return f"{ms} ms (~{1000.0 / ms:.1f}/s)"
+
+
+def _render_settings(
+    nmcli_available: bool, min_confidence: float, color_mode: str, detect_interval_ms: int,
+) -> str:
     body = f"""
     <div class="card">
       <h2>Camera</h2>
@@ -689,6 +707,25 @@ def _render_settings(nmcli_available: bool, min_confidence: float, color_mode: s
         Reads below this confidence still show live on the preview and count
         toward OCR reads -- they just aren't written to <a href="/hits">Hits</a>.
         0 stores everything. Saved value survives a restart.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Performance</h2>
+      <div class="settings-row">
+        <label for="detect-interval">Minimum time between detection passes</label>
+        <input type="range" id="detect-interval" min="0" max="2000" step="100" value="{detect_interval_ms}">
+        <output id="detect-interval-value">{_detect_interval_label(detect_interval_ms)}</output>
+        <button id="save-detect-interval" type="button" class="primary-button">Save</button>
+        <span class="saved" id="detect-interval-saved">Saved</span>
+      </div>
+      <p class="hint">
+        During heavy, continuous motion (busy traffic), every motion frame
+        would otherwise get a full detection+OCR pass -- expensive, and
+        the main cause of CPU heat and FPS drops when the Pi is under
+        load. A passing car spans many frames, so skipping most of them
+        barely affects catch rate. 0 = off (detect on every motion frame,
+        the original behavior). Watch "Throttled" on <a href="/">Live</a>
+        to see it kick in.
       </p>
     </div>
     {_wifi_fragment(nmcli_available)}
@@ -734,6 +771,25 @@ def _render_settings(nmcli_available: bool, min_confidence: float, color_mode: s
           body: JSON.stringify({{min_confidence: parseFloat(minConfidenceInput.value)}}),
         }});
         const saved = document.getElementById('confidence-saved');
+        saved.classList.add('show');
+        setTimeout(() => saved.classList.remove('show'), 1500);
+      }});
+
+      function formatInterval(ms) {{
+        return ms <= 0 ? 'off' : ms + ' ms (~' + (1000 / ms).toFixed(1) + '/s)';
+      }}
+      const detectIntervalInput = document.getElementById('detect-interval');
+      const detectIntervalValue = document.getElementById('detect-interval-value');
+      detectIntervalInput.addEventListener('input', () => {{
+        detectIntervalValue.textContent = formatInterval(parseInt(detectIntervalInput.value, 10));
+      }});
+      document.getElementById('save-detect-interval').addEventListener('click', async () => {{
+        await fetch('/api/settings', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{detect_interval_ms: parseInt(detectIntervalInput.value, 10)}}),
+        }});
+        const saved = document.getElementById('detect-interval-saved');
         saved.classList.add('show');
         setTimeout(() => saved.classList.remove('show'), 1500);
       }});

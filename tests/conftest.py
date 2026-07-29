@@ -45,8 +45,10 @@ class FakePlateDetector:
 
     def __init__(self, boxes: list[tuple[int, int, int, int, float]] | None = None) -> None:
         self._boxes = boxes if boxes is not None else []
+        self.calls = 0
 
     def detect(self, frame: np.ndarray) -> list[tuple[int, int, int, int, float]]:
+        self.calls += 1
         return list(self._boxes)
 
 

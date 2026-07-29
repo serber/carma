@@ -52,6 +52,15 @@ class DetectionConfig:
     # file for a custom-trained model.
     model_name: str = "yolo-v9-t-384-license-plate-end2end"
     confidence_threshold: float = 0.4
+    # Skip running detection/OCR on a motion frame if less than this many
+    # milliseconds have passed since the last detection pass -- caps how
+    # often the expensive models run during heavy, continuous motion (busy
+    # traffic), trading a little detection latency for lower sustained
+    # CPU load and heat. 0 (default) means no throttling: detect on every
+    # motion frame, same as before this setting existed. Just the starting
+    # value -- adjustable live from the dashboard's Settings page without a
+    # restart; see carma/settings.py.
+    min_interval_ms: int = 0
 
 
 @dataclasses.dataclass
@@ -181,6 +190,9 @@ def load_config(path: str | Path) -> Config:
         raise ConfigError(f"{path}: motion.threshold must be >= 0")
     if motion.min_area < 0:
         raise ConfigError(f"{path}: motion.min_area must be >= 0")
+
+    if detection.min_interval_ms < 0:
+        raise ConfigError(f"{path}: detection.min_interval_ms must be >= 0")
 
     if not (0.0 <= detection.confidence_threshold <= 1.0):
         raise ConfigError(

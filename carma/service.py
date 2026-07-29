@@ -49,7 +49,10 @@ def run(config_path: str) -> int:
     watchlist = Watchlist(config.watchlist.enabled, config.watchlist.plates)
     settings_path = Path(config.storage.db_path).parent / "runtime_settings.json"
     settings = RuntimeSettings(
-        config.storage.min_confidence, config.camera.color_mode, persist_path=str(settings_path)
+        config.storage.min_confidence,
+        config.camera.color_mode,
+        config.detection.min_interval_ms,
+        persist_path=str(settings_path),
     )
 
     counters = Counters()

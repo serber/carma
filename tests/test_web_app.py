@@ -66,6 +66,7 @@ def test_status_reports_counters_and_self_check():
     }
     assert "fps" in data
     assert "cpu_temp_celsius" in data
+    assert "detections_throttled" in data
 
 
 def test_status_reports_real_disk_usage_for_existing_images_dir():
@@ -198,11 +199,19 @@ def test_settings_page_shows_current_min_confidence():
     assert "0.65" in resp.text
 
 
+def test_settings_page_shows_current_detect_interval():
+    client = _client(settings=RuntimeSettings(min_confidence=0.0, detect_interval_ms=500))
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    assert 'id="detect-interval" min="0" max="2000" step="100" value="500"' in resp.text
+    assert "~2.0/s" in resp.text
+
+
 def test_get_settings_returns_current_values():
     client = _client(settings=RuntimeSettings(min_confidence=0.3))
     resp = client.get("/api/settings")
     assert resp.status_code == 200
-    assert resp.json() == {"min_confidence": 0.3, "color_mode": "color"}
+    assert resp.json() == {"min_confidence": 0.3, "color_mode": "color", "detect_interval_ms": 0}
 
 
 def test_post_settings_updates_min_confidence():
@@ -212,7 +221,7 @@ def test_post_settings_updates_min_confidence():
     resp = client.post("/api/settings", json={"min_confidence": 0.75})
 
     assert resp.status_code == 200
-    assert resp.json() == {"min_confidence": 0.75, "color_mode": "color"}
+    assert resp.json() == {"min_confidence": 0.75, "color_mode": "color", "detect_interval_ms": 0}
     assert settings.min_confidence == 0.75
 
 
@@ -223,8 +232,20 @@ def test_post_settings_updates_color_mode_only():
     resp = client.post("/api/settings", json={"color_mode": "grayscale"})
 
     assert resp.status_code == 200
-    assert resp.json() == {"min_confidence": 0.4, "color_mode": "grayscale"}
+    assert resp.json() == {"min_confidence": 0.4, "color_mode": "grayscale", "detect_interval_ms": 0}
     assert settings.color_mode == "grayscale"
+    assert settings.min_confidence == 0.4  # untouched
+
+
+def test_post_settings_updates_detect_interval_ms_only():
+    settings = RuntimeSettings(min_confidence=0.4)
+    client = _client(settings=settings)
+
+    resp = client.post("/api/settings", json={"detect_interval_ms": 500})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"min_confidence": 0.4, "color_mode": "color", "detect_interval_ms": 500}
+    assert settings.detect_interval_ms == 500
     assert settings.min_confidence == 0.4  # untouched
 
 
@@ -240,6 +261,14 @@ def test_post_settings_rejects_invalid_color_mode():
     client = _client(settings=RuntimeSettings(min_confidence=0.2))
 
     resp = client.post("/api/settings", json={"color_mode": "sepia"})
+
+    assert resp.status_code == 422
+
+
+def test_post_settings_rejects_out_of_range_detect_interval_ms():
+    client = _client(settings=RuntimeSettings(min_confidence=0.2))
+
+    resp = client.post("/api/settings", json={"detect_interval_ms": -1})
 
     assert resp.status_code == 422
 

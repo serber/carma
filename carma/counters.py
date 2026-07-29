@@ -15,6 +15,7 @@ class _Counts:
     motion_events: int = 0
     detections: int = 0
     ocr_reads: int = 0
+    detections_throttled: int = 0
 
 
 class Counters:

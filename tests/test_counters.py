@@ -8,6 +8,7 @@ def test_starts_at_zero():
     assert snap["motion_events"] == 0
     assert snap["detections"] == 0
     assert snap["ocr_reads"] == 0
+    assert snap["detections_throttled"] == 0
 
 
 def test_increment():

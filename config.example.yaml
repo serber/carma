@@ -22,6 +22,11 @@ detection:
   # Same detector fast-alpr pairs with fast-plate-ocr by default.
   model_name: yolo-v9-t-384-license-plate-end2end
   confidence_threshold: 0.4
+  # Skip detection/OCR on a motion frame if less than this many ms have
+  # passed since the last pass -- caps CPU/heat load during heavy,
+  # continuous motion. 0 = no throttling (detect on every motion frame).
+  # Adjustable live from the dashboard's Settings page without a restart.
+  min_interval_ms: 0
 
 ocr:
   # Registered fast-plate-ocr model (auto-downloaded once, see

@@ -18,17 +18,23 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 VALID_COLOR_MODES = {"color", "grayscale"}
+MAX_DETECT_INTERVAL_MS = 10_000
 
 
 class RuntimeSettings:
     def __init__(
-        self, min_confidence: float, color_mode: str = "color", persist_path: str | None = None,
+        self,
+        min_confidence: float,
+        color_mode: str = "color",
+        detect_interval_ms: int = 0,
+        persist_path: str | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._persist_path = Path(persist_path) if persist_path else None
         persisted = self._load_persisted()
         self._min_confidence = persisted.get("min_confidence", min_confidence)
         self._color_mode = persisted.get("color_mode", color_mode)
+        self._detect_interval_ms = persisted.get("detect_interval_ms", detect_interval_ms)
 
     def _load_persisted(self) -> dict:
         if self._persist_path is None or not self._persist_path.is_file():
@@ -59,6 +65,21 @@ class RuntimeSettings:
                 result["color_mode"] = value
             else:
                 logger.warning("persisted color_mode=%r invalid; using config default", value)
+        if "detect_interval_ms" in raw:
+            try:
+                value = int(raw["detect_interval_ms"])
+            except (ValueError, TypeError):
+                logger.warning(
+                    "persisted detect_interval_ms=%r invalid; using config default",
+                    raw["detect_interval_ms"],
+                )
+            else:
+                if 0 <= value <= MAX_DETECT_INTERVAL_MS:
+                    result["detect_interval_ms"] = value
+                else:
+                    logger.warning(
+                        "persisted detect_interval_ms=%r out of range; using config default", value
+                    )
 
         if result:
             logger.info("loaded persisted settings %s from %s", result, self._persist_path)
@@ -90,12 +111,29 @@ class RuntimeSettings:
             self._color_mode = value
         self._persist()
 
+    @property
+    def detect_interval_ms(self) -> int:
+        with self._lock:
+            return self._detect_interval_ms
+
+    @detect_interval_ms.setter
+    def detect_interval_ms(self, value: int) -> None:
+        if not (0 <= value <= MAX_DETECT_INTERVAL_MS):
+            raise ValueError(f"detect_interval_ms must be between 0 and {MAX_DETECT_INTERVAL_MS}")
+        with self._lock:
+            self._detect_interval_ms = value
+        self._persist()
+
     def _persist(self) -> None:
         if self._persist_path is None:
             return
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-            data = {"min_confidence": self._min_confidence, "color_mode": self._color_mode}
+            data = {
+                "min_confidence": self._min_confidence,
+                "color_mode": self._color_mode,
+                "detect_interval_ms": self._detect_interval_ms,
+            }
             self._persist_path.write_text(json.dumps(data))
         except OSError:
             logger.exception("failed to persist settings to %s", self._persist_path)

@@ -399,6 +399,41 @@ def test_color_mode_leaves_frames_untouched_by_default():
     assert int(pixel[0]) > int(pixel[1]) + 50  # still blue-dominant
 
 
+def test_detect_interval_ms_zero_runs_detection_every_motion_frame():
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    loop = _make_loop(
+        FakeSource(), Counters(), _always_motion(), plate_detector,
+        settings=RuntimeSettings(min_confidence=0.0, detect_interval_ms=0),
+    )
+
+    loop._process(frame)  # seeds motion baseline
+    loop._process(frame)
+    loop._process(frame)
+
+    assert plate_detector.calls == 2
+
+
+def test_detect_interval_ms_throttles_rapid_successive_calls():
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    counters = Counters()
+    plate_detector = FakePlateDetector(boxes=[(1, 1, 4, 4, 0.9)])
+    # An interval far longer than this test can possibly take wall-clock
+    # time guarantees every call after the first is throttled.
+    loop = _make_loop(
+        FakeSource(), counters, _always_motion(), plate_detector,
+        settings=RuntimeSettings(min_confidence=0.0, detect_interval_ms=10_000),
+    )
+
+    loop._process(frame)  # seeds motion baseline
+    loop._process(frame)  # first real detection attempt: allowed
+    loop._process(frame)  # throttled
+    loop._process(frame)  # throttled
+
+    assert plate_detector.calls == 1
+    assert counters.snapshot()["detections_throttled"] == 2
+
+
 def test_low_confidence_read_does_not_block_dedup_for_later_good_read(tmp_path):
     # a below-threshold read must not consume the dedup slot, or a good
     # read of the same plate moments later would get wrongly suppressed
