@@ -50,7 +50,7 @@ def test_start_configures_and_starts_camera(monkeypatch):
     source.start()
 
     mock_instance.create_video_configuration.assert_called_once_with(
-        main={"size": (1280, 720), "format": "BGR888"},
+        main={"size": (1280, 720), "format": "RGB888"},
         controls={"FrameRate": 25},
     )
     mock_instance.configure.assert_called_once()

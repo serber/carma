@@ -24,7 +24,13 @@ class Picamera2Source(FrameSource):
 
         self._picam2 = Picamera2()
         config = self._picam2.create_video_configuration(
-            main={"size": self._resolution, "format": "BGR888"},
+            # picamera2/libcamera name these after the DRM/register format,
+            # not the in-memory byte order, so they're the opposite of what
+            # you'd guess: "RGB888" is what actually hands back BGR-ordered
+            # bytes (cv2's native order); "BGR888" would give RGB-ordered
+            # bytes and show every colour inverted-ish (blues rendering as
+            # yellows, etc.) once treated as BGR downstream.
+            main={"size": self._resolution, "format": "RGB888"},
             controls={"FrameRate": self._framerate},
         )
         self._picam2.configure(config)
@@ -57,8 +63,8 @@ class Picamera2Source(FrameSource):
     def read(self) -> np.ndarray | None:
         if self._picam2 is None:
             return None
-        # BGR888 configuration hands back an ndarray already in BGR order,
-        # ready for cv2/onnxruntime use downstream.
+        # RGB888 configuration (see start()) hands back an ndarray already
+        # in BGR order, ready for cv2/onnxruntime use downstream.
         frame = self._picam2.capture_array()
         self._rate.tick()
         return frame
