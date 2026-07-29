@@ -51,7 +51,10 @@ _Filled in as each piece lands — see build order in SPEC.md._
 - [x] Browse plate reads at `/hits` — timestamp, plate string, KZ/RU/unknown
       format tag, confidence, watchlist match (highlighted red with a ⚠ if
       `watchlist.enabled` and it matches a configured plate/substring), and
-      the cropped plate image (click through to the full frame)
+      the cropped plate image (click through to the full frame). Header
+      shows total hits stored and disk space used by images, with a
+      one-click "Clear all hits & images" button when it's time to wipe
+      the SD card back down
 - [x] `journalctl -u carma-app -f` to watch structured logs — every module logs
       via its own name (`carma.capture.picamera2_source`, `carma.web.app`,
       ...) so the log line tells you which stage is talking; the same
@@ -178,8 +181,7 @@ commands above still work too, e.g. for scripting a fleet rollout.
 ## Settings page
 
 The dashboard's **Settings** tab (`/settings`) is the one place for
-everything that isn't a build-time config: Wi-Fi (above), camera color
-mode, and restarting.
+everything that isn't a build-time config value:
 
 - **Camera color mode** toggles between color and black & white. It
   applies to the live preview, detection/OCR, and stored hit images alike
@@ -187,6 +189,20 @@ mode, and restarting.
   next captured frame, and survives a restart the same way
   `storage.min_confidence` does (`camera.color_mode` in `config.yaml` is
   just the starting value).
+- **Detection confidence** -- the "minimum confidence to store a hit"
+  slider (formerly on the Live page; moved here so Live stays focused on
+  status/preview).
+- **Performance** -- a "minimum time between detection passes" slider
+  (`detection.min_interval_ms` / `RuntimeSettings.detect_interval_ms`).
+  Under heavy, continuous motion (busy traffic) the capture loop would
+  otherwise run a full detect+OCR pass on every motion frame -- the main
+  driver of CPU heat and FPS collapse under sustained load. A passing car
+  spans many frames, so skipping most of them barely affects catch rate.
+  0 (default) = off, detect on every motion frame, same as before this
+  setting existed. Watch the "Detections throttled" tile on the Live page
+  to see it actually kick in.
+- **Wi-Fi** -- status/scan/connect/saved networks, see
+  [Wi-Fi access point](#wi-fi-access-point) above.
 - **Restart carma-app service** / **Reboot device** run
   `scripts/carma-restart.sh` as root via another narrow sudoers rule
   (`systemd/carma-restart.sudoers`). The helper schedules the actual
@@ -195,6 +211,11 @@ mode, and restarting.
   would kill the very process handling the dashboard's HTTP request (and
   everything else in `carma-app.service`'s cgroup) before the browser ever
   saw a response.
+
+All of the above except Wi-Fi/restart are plain `RuntimeSettings` fields
+(`carma/settings.py`) -- persisted to `data/runtime_settings.json`,
+applied live without a restart, and read back on the next startup ahead
+of `config.yaml`'s defaults.
 
 ## Development (off-Pi)
 
