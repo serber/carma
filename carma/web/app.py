@@ -271,6 +271,8 @@ _STYLE = """
     .stat-tile { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }
     .stat-tile .value { font-size: 26px; font-weight: 600; }
     .stat-tile .label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .stat-tile .value.pipeline-value { font-size: 18px; white-space: nowrap; }
+    .pipeline-arrow { color: var(--text-muted); font-weight: 400; padding: 0 4px; }
     .stat-tile.warning .value { color: var(--warning); }
     .stat-tile.critical .value { color: var(--critical); }
     #log {
@@ -414,9 +416,12 @@ def _render_index(self_check: dict[str, bool]) -> str:
       <h2>Counters</h2>
       <div class="stat-grid">
         <div class="stat-tile"><div class="value" id="stat-frames">&ndash;</div><div class="label">Frames captured</div></div>
-        <div class="stat-tile"><div class="value" id="stat-motion">&ndash;</div><div class="label">Motion events</div></div>
-        <div class="stat-tile"><div class="value" id="stat-detections">&ndash;</div><div class="label">Detections</div></div>
-        <div class="stat-tile"><div class="value" id="stat-ocr">&ndash;</div><div class="label">OCR reads</div></div>
+        <div class="stat-tile">
+          <div class="value pipeline-value">
+            <span id="stat-motion">&ndash;</span><span class="pipeline-arrow">&rarr;</span><span id="stat-detections">&ndash;</span><span class="pipeline-arrow">&rarr;</span><span id="stat-ocr">&ndash;</span>
+          </div>
+          <div class="label">Motion &rarr; detections &rarr; OCR reads</div>
+        </div>
         <div class="stat-tile"><div class="value" id="stat-throttled">&ndash;</div><div class="label">Detections throttled</div></div>
         <div class="stat-tile"><div class="value" id="stat-fps">&ndash;</div><div class="label">FPS</div></div>
         <div class="stat-tile" id="tile-temp"><div class="value" id="stat-temp">&ndash;</div><div class="label">CPU temp</div></div>
