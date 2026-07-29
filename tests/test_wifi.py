@@ -81,7 +81,7 @@ def test_scan_networks_dedupes_by_strongest_signal_and_excludes_own_ap(monkeypat
     stdout = "\n".join([
         "HomeWifi:40:WPA2:",
         "HomeWifi:70:WPA2:",
-        "carma:90:WPA2:",
+        "carma-ap:90:WPA2:",
         "OpenNet:55::",
     ])
     monkeypatch.setattr(wifi, "_run", lambda args, timeout: _fake_result(stdout))

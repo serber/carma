@@ -18,14 +18,25 @@ _Filled in as each piece lands — see build order in SPEC.md._
       the official Camera Module 3/IMX708), `camera_auto_detect=1` won't
       find it — see [Third-party camera sensors](#third-party-camera-sensors)
       below
-- [x] Install carma (`sudo scripts/install.sh`) — creates the `carma-svc`
-      service user (deliberately not `carma`: that collides with a Pi
-      login username someone might pick, especially since it's the
-      project name — see the script's comment), a venv at
-      `/opt/carma/.venv` (with `--system-site-packages` for picamera2),
+- [x] Install carma — one command on a bare Pi with nothing on it yet:
+      ```sh
+      curl -fsSL https://raw.githubusercontent.com/serber/carma/development/scripts/bootstrap.sh | bash
+      ```
+      (clones to `~/carma-app` and runs `sudo scripts/install.sh`; swap
+      `development` for whatever branch/tag you want to deploy). Already
+      have a checkout? Just run `sudo scripts/install.sh` from inside it —
+      that's all `bootstrap.sh` does under the hood. Either way it: creates
+      the `carma-svc` service user (deliberately not `carma`: that collides
+      with a Pi login username someone might pick, especially since it's
+      the project name — see the script's comment), a venv at
+      `/opt/carma-app/.venv` (with `--system-site-packages` for picamera2),
       seeds `config.yaml`, pre-downloads the plate-detector and OCR models
       (needs internet once — see `scripts/fetch_models.py`), installs +
-      enables the systemd unit
+      enables the `carma-app` systemd unit, and sets up the `carma-ap`
+      hotspot profile with a default SSID/password (`carma-ap` /
+      `carmapwd` — override via `CARMA_AP_SSID`/`CARMA_AP_PASSWORD` env
+      vars before running, or change it later from the dashboard's Wi-Fi
+      tab / `nmcli`)
 - [ ] Power on. **While developing**, leave the Pi joined to your regular
       Wi-Fi and open `http://<pi-ip>:8000` (`dashboard.host: 0.0.0.0`
       already listens on every interface, no AP needed — find the IP via
@@ -41,7 +52,7 @@ _Filled in as each piece lands — see build order in SPEC.md._
       format tag, confidence, watchlist match (highlighted red with a ⚠ if
       `watchlist.enabled` and it matches a configured plate/substring), and
       the cropped plate image (click through to the full frame)
-- [x] `journalctl -u carma -f` to watch structured logs — every module logs
+- [x] `journalctl -u carma-app -f` to watch structured logs — every module logs
       via its own name (`carma.capture.picamera2_source`, `carma.web.app`,
       ...) so the log line tells you which stage is talking; the same
       recent lines are also on the `/` dashboard (no SSH needed for a
@@ -86,13 +97,28 @@ no need for separate `hostapd`/`dnsmasq` services fighting NetworkManager
 for control of `wlan0`. Fewer moving parts matters here: this device won't
 have anyone around to fix a broken network stack.
 
-**1. Create the AP profile (one-time, doesn't affect your current network).**
-`autoconnect no` for now on purpose — this keeps it from fighting your
-regular Wi-Fi profile for activation on every boot while you're still
-developing:
+**1. The AP profile is created automatically.** `scripts/install.sh` sets
+up a `carma-ap` connection profile (`autoconnect no` on purpose — this
+keeps it from fighting your regular Wi-Fi profile for activation on every
+boot while you're still developing) with SSID `carma-ap` and password
+`carmapwd` by default. Override either before installing:
 
 ```sh
-sudo nmcli con add type wifi ifname wlan0 con-name carma-ap autoconnect no ssid carma
+sudo CARMA_AP_SSID=my-ssid CARMA_AP_PASSWORD='a-real-password' scripts/install.sh
+```
+
+or change them later (dashboard's Wi-Fi tab, or by hand):
+
+```sh
+sudo nmcli con modify carma-ap 802-11-wireless.ssid my-ssid
+sudo nmcli con modify carma-ap wifi-sec.psk "a-real-password"
+```
+
+If you're setting this up manually instead (no `install.sh`), the
+equivalent one-time commands are:
+
+```sh
+sudo nmcli con add type wifi ifname wlan0 con-name carma-ap autoconnect no ssid carma-ap
 sudo nmcli con modify carma-ap 802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 7
 sudo nmcli con modify carma-ap wifi-sec.key-mgmt wpa-psk
 sudo nmcli con modify carma-ap wifi-sec.psk "<choose-a-real-password>"
@@ -107,8 +133,8 @@ real deployment):
 sudo nmcli con up carma-ap
 ```
 
-Verify with `nmcli con show --active` and by joining the `carma` network
-from a phone/laptop and opening `http://192.168.4.1:8000`.
+Verify with `nmcli con show --active` and by joining the `carma-ap`
+network from a phone/laptop and opening `http://192.168.4.1:8000`.
 
 **3. Switch back to your regular Wi-Fi** for maintenance (e.g. re-running
 `scripts/fetch_models.py` after changing a model, or just to get back to

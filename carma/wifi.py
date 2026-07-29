@@ -2,7 +2,7 @@
 # Wi-Fi settings page. Status and scanning are read-only and run directly
 # as carma-svc; connecting/forgetting a network mutates NetworkManager's
 # system connection files, which needs root -- carma-svc doesn't have that
-# (see systemd/carma.service), so those two go through
+# (see systemd/carma-app.service), so those two go through
 # scripts/carma-wifi.sh via the narrow sudoers rule installed by
 # scripts/install.sh, instead of calling nmcli directly with elevated
 # scope.
@@ -15,12 +15,12 @@ import subprocess
 
 logger = logging.getLogger(__name__)
 
-# Must match scripts/carma-ap-fallback.sh / README.md's one-time setup.
+# Must match scripts/install.sh's default AP setup / scripts/carma-ap-fallback.sh.
 AP_CONNECTION_NAME = "carma-ap"
-AP_SSID = "carma"
+AP_SSID = "carma-ap"
 
 _IFACE = "wlan0"
-_WIFI_HELPER = "/opt/carma/scripts/carma-wifi.sh"
+_WIFI_HELPER = "/opt/carma-app/scripts/carma-wifi.sh"
 _STATUS_TIMEOUT = 15
 _SCAN_TIMEOUT = 30
 _CONNECT_TIMEOUT = 45

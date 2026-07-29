@@ -5,12 +5,12 @@ After=network.target
 [Service]
 Type=simple
 User=carma-svc
-WorkingDirectory=/opt/carma
-ExecStart=/opt/carma/.venv/bin/carma --config /opt/carma/config.yaml
+WorkingDirectory=/opt/carma-app
+ExecStart=/opt/carma-app/.venv/bin/carma --config /opt/carma-app/config.yaml
 Restart=on-failure
 RestartSec=5
 
-# journald captures stdout/stderr; view with: journalctl -u carma -f
+# journald captures stdout/stderr; view with: journalctl -u carma-app -f
 StandardOutput=journal
 StandardError=journal
 

@@ -1,6 +1,6 @@
-# Lets carma-svc (the unprivileged service user, see carma.service) run
+# Lets carma-svc (the unprivileged service user, see carma-app.service) run
 # exactly one script as root: the Wi-Fi connect/forget helper behind the
 # dashboard's Wi-Fi settings page. Nothing else -- carma-svc still can't
 # run nmcli or anything else as root. Installed to /etc/sudoers.d/carma-wifi
 # by scripts/install.sh (validated with visudo -c first).
-carma-svc ALL=(root) NOPASSWD: /opt/carma/scripts/carma-wifi.sh
+carma-svc ALL=(root) NOPASSWD: /opt/carma-app/scripts/carma-wifi.sh
