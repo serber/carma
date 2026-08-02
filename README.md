@@ -1,6 +1,8 @@
 # carma
 Raspberry Pi ANPR box: spots and reads passing plates, live Wi-Fi dashboard
 
+![carma dashboard's Live page, showing the camera preview with a detected plate boxed and read, plus system status, counters, storage, and log tail](docs/images/example-01.png)
+
 See [SPEC.md](SPEC.md) for the full build spec.
 
 See [PLAN.md](PLAN.md) for the atomic build-order steps and current progress.
